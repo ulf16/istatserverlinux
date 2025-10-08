@@ -53,6 +53,7 @@
 #ifdef HAVE_SYS_TIME_H
 # include <sys/time.h>
 #endif
+#include <time.h>
 
 #ifdef HAVE_KSTAT_H
 # include <kstat.h>
