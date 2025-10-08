@@ -1,17 +1,32 @@
-#
-# istatserver daemon service unit file
-#
-
+# /etc/systemd/system/istatserver.service
 [Unit]
-Description=System monitoring daemon for remote monitoring with iStat for iOS or iStat for macOS
-Documentation=man:istatserver(1) 
-After=network.target
+Description=iStat Server for remote monitoring with iStat for iOS or macOS
+Documentation=man:istatserver(1)
+Wants=network-online.target systemd-udev-trigger.service
+After=network-online.target systemd-udevd.service systemd-udev-trigger.service
 
 [Service]
-ExecStart=/usr/local/bin/istatserver -d
-Restart=on-abort
-RestartSec=5
-Type=forking
+Type=simple
+User=istat
+Group=istat
+
+# Give it a writable runtime dir for its pid file
+RuntimeDirectory=istatserver
+RuntimeDirectoryMode=0755
+
+# Run in foreground, but still provide a pid file where it expects
+ExecStart=/usr/local/bin/istatserver --pid=/run/istatserver/istatserver.pid
+
+# (Optional) wait briefly for udev to finish creating/chmod’ing RAPL files
+ExecStartPre=/bin/sh -c 'udevadm settle -t 3 || true'
+
+Restart=on-failure
+RestartSec=3
+
+# If you want to be extra strict later, you can uncomment hardening lines like:
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/usr/local/etc/istatserver /run/istatserver
 
 [Install]
 WantedBy=multi-user.target
