@@ -122,14 +122,10 @@
 # include <uvm/uvm_extern.h>
 #endif
 
-#ifdef TIME_WITH_SYS_TIME
+#ifdef HAVE_SYS_TIME_H
 # include <sys/time.h>
-# include <time.h>
-#elif defined(HAVE_SYS_TIME_H)
-# include <sys/time.h>
-#else
-# include <time.h>
 #endif
+#include <time.h>
 
 #ifdef HAVE_SYS_VMMETER_H
 # include <sys/vmmeter.h>
