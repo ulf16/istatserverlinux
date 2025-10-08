@@ -15,6 +15,90 @@ Quick install will install and update any required packages. If you do not want 
 
 ### Supported OSs
 - Linux
+## 2025-10-08 Updates
+## CPU Power and Frequency Monitoring (non-root setup)
+
+This fork adds modern Linux hardware telemetry support for Intel systems — including live CPU package power and frequency — **without requiring root privileges**.
+
+### New sensors
+
+- **RAPL Power Domains** — reports real-time power (in watts) per CPU domain:
+  - `/sys/class/powercap/intel-rapl:*/*/energy_uj`
+  - Typically includes `package-0`, `core`, and `uncore`
+- **CPU Frequency** — reads per-policy current CPU frequency from:
+  - `/sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq`
+
+All sensors are visible remotely in iStat for macOS/iOS through the `istatserver` daemon.
+
+---
+
+### Non-root access to RAPL energy readings
+
+- By default, RAPL energy files (`energy_uj`) are readable only by **root**.  
+- To allow the unprivileged `istat` service user to read them safely, add this **udev rule**:
+
+`cat <<'RULE' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", RUN+="/bin/chmod 0444 %S%p/energy_uj"
+RULE`
+
+`sudo udevadm control --reload-rules`
+
+`sudo udevadm trigger --subsystem-match=powercap`
+
+- You can verify that the permissions were applied correctly:
+
+`ls -l /sys/class/powercap/intel-rapl:*/energy_uj`
+- expected: -r--r--r--
+
+`sudo -u istat cat /sys/class/powercap/intel-rapl:0/energy_uj`
+- should print a numeric value (microjoules)
+
+This change survives reboots and does not weaken system security — only allows read access to instantaneous CPU energy counters.
+
+⸻
+
+## Systemd unit (modernized)
+
+### This updated service file runs iStat Server as the istat user, with minimal privileges and no PID management needed:
+
+[Unit]
+Description=iStat Server for remote monitoring with iStat for iOS/macOS
+Documentation=man:istatserver(1)
+After=network-online.target systemd-udevd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=istat
+Group=istat
+ExecStart=/usr/local/bin/istatserver
+WorkingDirectory=/usr/local/etc/istatserver
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/usr/local/etc/istatserver
+
+[Install]
+WantedBy=multi-user.target
+
+### Install and enable:
+
+`sudo systemctl daemon-reload`
+
+`sudo systemctl enable --now istatserver`
+
+
+⸻
+
+## Notes
+- The applesmc kernel message `applesmc: hwmon_device_register() is deprecated` is harmless and does not affect temperature readings.
+- Tested on Intel Mac mini (Debian 12, kernel 6.1) using the istat service user.
+- No setcap or root privileges required.
+
+----
+## Original Readme cont.
 - FreeBSD, DragonFly BSD, OpenBSD, NetBSD and other BSD based OSs
 - AIX
 - Solaris
