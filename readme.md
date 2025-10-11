@@ -20,7 +20,18 @@ All changes are backward-compatible with the original iStat client app.
 curl -fsSL https://raw.githubusercontent.com/ulf16/istatserverlinux/master/get-istatserver.sh -o istatserverlinux.sh && sh istatserverlinux.sh
 ```
 
-Quick install will install and update any required packages. If you do not want packages installed or updated automatically then please perform a manual install using the instructions below
+Quick install will install and update any required packages. 
+The installer is designed for **Linux** distributions using **systemd**.
+It automatically builds, installs, and enables the istatserver service.
+
+On **non-systemd** systems (e.g., Alpine with OpenRC, Devuan, or BSDs),
+the build will still succeed, but service installation will be skipped.
+You can then run the daemon manually:
+```
+sudo -u istat /usr/local/bin/istatserver
+```
+or create a small init script if you prefer to start it automatically.
+If you do not want packages installed or updated automatically then please perform a manual install using the instructions below
 
 -----
 
@@ -122,10 +133,10 @@ WantedBy=multi-user.target
 - No setcap or root privileges required.
 
 ----
-## Original Readme cont.
 
 ### Supported OSs
-- Linux
+- Linux (updated)
+  
 - FreeBSD, DragonFly BSD, OpenBSD, NetBSD and other BSD based OSs
 - AIX
 - Solaris
@@ -165,6 +176,104 @@ Upgrades follow the same process as standard installs. Please stop istatserver i
 
 -----
 
+### Security Notes
+
+- **Least privilege:**
+    
+    The service runs as a dedicated user istat (not root).
+    
+    Configuration and database files live in /usr/local/etc/istatserver/
+    
+    and are owned by istat:istat.
+    
+- **Foreground service:**
+    
+    The included systemd unit uses Type=simple (no -d), meaning the process stays
+    
+    in the foreground under systemd’s direct supervision.
+    
+    This ensures clean restarts, proper logging (journalctl), and avoids PID-file issues.
+    
+- **No elevated privileges required:**
+    
+    Power (RAPL) readings are made accessible to the istat user through a udev rule
+    
+    that adjusts permissions on the relevant sysfs files.
+    
+    By default, the installer applies a world-readable rule:
+    
+
+```
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", RUN+="/bin/chmod 0444 %S%p/energy_uj"
+```
+
+- For tighter control, you can restrict access to the istat group instead:
+    
+
+```
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", GROUP="istat", MODE="0440"
+```
+
+- Then reload and apply the rule:
+    
+
+```
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=powercap
+```
+
+-   
+    
+- **Process hardening:**
+    
+    The systemd unit enforces several security directives:
+    
+    NoNewPrivileges, PrivateTmp, and multiple Protect*= options to reduce
+    
+    the attack surface. You can tighten them further (for example
+    
+    ProtectSystem=strict, ReadWritePaths=/usr/local/etc/istatserver)
+    
+    depending on your setup.
+    
+- **Certificates and keys:**
+    
+    Self-signed certificates use RSA-2048 with SHA-256 and are generated through
+    
+    OpenSSL’s modern EVP API. They are stored in:
+    
+
+```
+/usr/local/etc/istatserver/key.pem
+/usr/local/etc/istatserver/cert.pem
+```
+
+- Make sure these files are **not world-writable** and owned by the istat user.
+    
+    You can safely replace them with your own certs using the same file paths.
+    
+- **Network exposure:**
+    
+    istatserver listens on all interfaces by default.
+    
+    To restrict access, configure network_addr and network_port
+    
+    in /usr/local/etc/istatserver/istatserver.conf,
+    
+    or use a local firewall rule to limit visibility.
+    
+- **Database and logging:**
+    
+    Historical data is stored in SQLite under /usr/local/etc/istatserver/.
+    
+    On devices with flash storage (like SBCs), consider placing this directory
+    
+    on a more durable drive, tmpfs, or using periodic syncs to reduce write wear.
+    
+
+---
+
+
 ### Starting iStat Server at boot
 iStat Server does not install any scripts to start itself at boot. Sample scripts for rc.d, upstart and systemd are included in the resources directory. You may need to customize them depending on your OS.
 
@@ -172,11 +281,11 @@ iStat Server does not install any scripts to start itself at boot. Sample script
 - sudo cp ./resource/systemd/istatserver.service  /etc/systemd/system/istatserver.service
 - sudo service istatserver start
 
-### Starting with upstart
+### Starting with upstart (outdated)
 - sudo cp ./resource/upstart/istatserver.conf  /etc/init/istatserver.conf
 - sudo start istatserver
 
-### Starting with rc.d
+### Starting with rc.d (outdated)
 - sudo cp ./resource/rc.d/istatserver  /etc/rc.d/istatserver
 - sudo /etc/rc.d/istatserver start
 
