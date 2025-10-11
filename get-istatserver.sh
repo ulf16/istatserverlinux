@@ -1,190 +1,205 @@
-#!/bin/sh
-set -e
+#!/usr/bin/env sh
+set -Eeuo pipefail
 
-# This script is meant for quick & easy install via:
-#   $ curl -fsSL https://raw.githubusercontent.com/bjango/istatserverlinux/master/get-istatserver.sh
-#   $ sh get-istatserver.sh
-#
+# Quick installer for ulf16/istatserverlinux (maintained fork)
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/ulf16/istatserverlinux/master/get-istatserver.sh -o istatserverlinux.sh && sh istatserverlinux.sh
 
-command_exists() {
-  command -v "$@" > /dev/null 2>&1
-}
+REPO="ulf16/istatserverlinux"
+BRANCH="master"
 
-get_distribution() {
-  lsb_dist=""
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-  if [ -r /etc/os-release ]; then
-    lsb_dist="$(. /etc/os-release && echo "$ID")"
-  else
-    lsb_dist="$(uname)"
-  fi
-
-  echo "$lsb_dist"
-}
-
-get_distribution_like() {
-  lsb_dist_like=""
-
-  if [ -r /etc/os-release ]; then
-    lsb_dist_like="$(. /etc/os-release && echo "$ID_LIKE")"
-  fi
-
-  echo "$lsb_dist_like"
-}
-
-we_did_it() {
-  if command_exists istatserver && [ -e /usr/local/etc/istatserver/istatserver.conf ]; then
-    (
-      set -x
-      $sh_c 'istatserver -v'
-    ) || true
-  fi
-
-  echo
-  echo "Perfetto, you got yourself a brand new iStat Server."
-  echo
-  echo "You can now run it as a daemon using the following command:"
-  echo "    sudo /usr/local/bin/istatserver -d"
-  echo
-  echo "The istatserver config file is located at"
-  echo "    /usr/local/etc/istatserver/istatserver.conf"
-  echo
-  echo "iStat View will ask for a passcode the first time you connect."
-  echo "You can edit this passcode in the istatserver config file."
-  echo
-  echo "Here is your current passcode"
-  grep -w /usr/local/etc/istatserver/istatserver.conf -e server_code | grep -v "#" | sed -e "s/server_code//g" | sed -e 's/[ \t]//g'
-  echo
-  echo "Make sure to take a look at the documentation at:"
-  echo "https://bjango.com/help/istat3/istatserverlinux/"
-  echo
-  echo "Learn how to run istatserver at boot:"
-  echo "https://github.com/bjango/istatserverlinux#starting-istat-server-at-boot"
-  echo
-}
-
-istat_pls() {
-  echo "# Executing iStat Server for Linux install script"
-
-  user="$(id -un 2>/dev/null || true)"
-
-  sh_c='sh -c'
-  if [ "$user" != 'root' ]; then
+need_root() {
+  if [ "$(id -u)" -ne 0 ]; then
     if command_exists sudo; then
-      sh_c='sudo -E sh -c'
+      sudo "$@"
+    elif command_exists su; then
+      su -c "$*"
     else
-      if command_exists su; then
-        sh_c='su -c'
-      else
-        echo "Error: this installer needs the ability to run commands as root."
-        echo "We are unable to find either 'sudo' or 'su' available to make this happen."
-        exit 1
-      fi
+      echo "This step needs root (sudo or su)." >&2
+      exit 1
     fi
+  else
+    "$@"
   fi
+}
 
-  # Some platform detection
-  lsb_dist=$( get_distribution )
-  lsb_dist="$(echo "$lsb_dist" | tr '[:upper:]' '[:lower:]')"
-  
-  lsb_dist_like=$( get_distribution_like )
-  lsb_dist_like="$(echo "$lsb_dist_like" | tr '[:upper:]' '[:lower:]')"
+detect_pkg_mgr() {
+  if command_exists apt-get; then echo apt; return
+  elif command_exists dnf; then echo dnf; return
+  elif command_exists yum; then echo yum; return
+  elif command_exists zypper; then echo zypper; return
+  elif command_exists pacman; then echo pacman; return
+  elif command_exists apk; then echo apk; return
+  fi
+  echo unknown
+}
 
-
-# Check if OS is supported or find what OS it is like and try that instead
-  case "$lsb_dist" in
-    ubuntu|debian|raspbian|linuxmint|elementary|centos|fedora|freebsd|dragonfly|netbsd|solus|arch|opensuse|manjaro|slackware|sabayon|gentoo)
+install_deps() {
+  pm="$(detect_pkg_mgr)"
+  echo "Installing build dependencies via ${pm}…"
+  case "$pm" in
+    apt)
+      need_root apt-get update -qq
+      # libsensors dev pkg name differs by distro vintage
+      # try libsensors-dev first, fall back to libsensors4-dev
+      need_root apt-get install -y -qq \
+        build-essential autoconf automake libtool pkg-config \
+        libxml2-dev libssl-dev libsqlite3-dev libavahi-client-dev curl ca-certificates || true
+      if ! dpkg -s libsensors-dev >/dev/null 2>&1; then
+        need_root apt-get install -y -qq libsensors4-dev
+      fi
+      ;;
+    dnf)
+      need_root dnf -y -q install gcc-c++ make autoconf automake libtool pkgconfig \
+        libxml2-devel openssl-devel sqlite-devel lm_sensors lm_sensors-devel avahi-devel curl ca-certificates
+      ;;
+    yum)
+      need_root yum -y -q install gcc-c++ make autoconf automake libtool pkgconfig \
+        libxml2-devel openssl-devel sqlite-devel lm_sensors lm_sensors-devel avahi-devel curl ca-certificates
+      ;;
+    zypper)
+      need_root zypper -n install gcc-c++ make autoconf automake libtool pkg-config \
+        libxml2-devel openssl-devel sqlite3-devel lm_sensors lm_sensors-devel avahi-devel curl ca-certificates
+      ;;
+    pacman)
+      need_root pacman -Sy --noconfirm base-devel autoconf automake libtool pkgconf \
+        libxml2 openssl sqlite lm_sensors avahi curl ca-certificates
+      ;;
+    apk)
+      need_root apk add --no-cache build-base autoconf automake libtool pkgconf \
+        libxml2-dev openssl-dev sqlite-dev lm-sensors-dev avahi-dev curl ca-certificates
       ;;
     *)
-	  case "$lsb_dist_like" in
-	  	ubuntu|debian)
-		  lsb_dist="ubuntu";
-		  ;;
-	  	fedora)
-		  lsb_dist="fedora";
-		  ;;
-	  	freebsd)
-		  lsb_dist="freebsd";
-		  ;;
-	  	arch)
-		  lsb_dist="arch";
-		  ;;
-	  	opensuse)
-		  lsb_dist="opensuse";
-		  ;;
-	  esac
-  esac
-
-
-  # Run setup for each distribution accordingly
-  
-  echo "Installing required packages"
-
-  case "$lsb_dist" in
-    ubuntu|debian|raspbian|linuxmint|elementary)
-      $sh_c "apt-get update -qq > /dev/null"
-      $sh_c "apt-get install -y -qq curl g++ autoconf autogen libxml2-dev libssl-dev libsqlite3-dev libsensors4-dev libavahi-common-dev libavahi-client-dev > /dev/null"
-      ;;
-    centos|fedora)
-      if [ -r /bin/dnf ]; then
-        $sh_c "dnf -q -y install curl autoconf automake gcc-c++ libxml2-devel openssl-devel sqlite-devel lm_sensors lm_sensors-devel avahi-devel  > /dev/null"
-	  else
-        $sh_c "yum -q -y install curl autoconf automake gcc-c++ libxml2-devel openssl-devel sqlite-devel lm_sensors lm_sensors-devel avahi-devel  > /dev/null"
-	  fi
-      ;;
-    freebsd|dragonfly)
-      $sh_c "env ASSUME_ALWAYS_YES=YES pkg install curl autoconf automake openssl sqlite  > /dev/null"
-      ;;
-    solus)
-      $sh_c "eopkg install -y -c system.devel  > /dev/null"
-      $sh_c "eopkg install -y  curl openssl-devel sqlite3-devel lm_sensors-devel  > /dev/null"
-      ;;
-    opensuse)
-      $sh_c "zypper install -y  gcc-c++ libxml2-devel autoconf automake curl openssl-devel sqlite3-devel  > /dev/null"
-      ;;
-    #openbsd)
-    #  $sh_c "pkg_add -I automake-1.9.6p12 autoconf-2.69p2 > /dev/null"
-    #  ;;
-    arch|manjaro)
-      $sh_c "pacman -S --noconfirm automake autoconf openssl sqlite > /dev/null || :"
-      ;;
-    netbsd)
-      $sh_c "pkg_add -I automake autoconf > /dev/null || :"
-      ;;
-    slackware)
-      $sh_c "slackpkg -batch=on -default_answer=y install automake autoconf gcc-g++ curl lm_sensors > /dev/null || :"
-      ;;
-    sabayon|gentoo)
-      $sh_c "emerge --ask=n automake autoconf gcc curl > /dev/null || :"
-      ;;
-    *)
-	  echo "unsupported OS";
+      echo "Unsupported distro: missing known package manager." >&2
       exit 1
       ;;
   esac
-  
-  if [ -r ./istatserverlinux ]; then
-	  $sh_c "rm -r ./istatserverlinux"
-  fi
-
-  echo "Downloading istatserver"
-  $sh_c "curl -fsSL https://github.com/bjango/istatserverlinux/archive/master.tar.gz -o istatserverlinux.tar.gz"
-
-  echo "Extracting istatserver"
-  $sh_c "tar -zxf istatserverlinux.tar.gz"
-  $sh_c "mv istatserverlinux-* istatserverlinux"
-
-  echo "Building istatserver"
-  $sh_c "cd istatserverlinux && ./autogen > /dev/null"
-  $sh_c "cd istatserverlinux && ./configure > /dev/null"
-  $sh_c "cd istatserverlinux && make > /dev/null"
-  $sh_c "cd istatserverlinux && make install > /dev/null"
-
-  echo "Cleaning up"
-  $sh_c "rm -r ./istatserverlinux > /dev/null"
-  $sh_c "rm ./istatserverlinux.tar.gz > /dev/null"
-  we_did_it
-  exit 0
 }
 
-istat_pls
+make_build_dir() {
+  WORKDIR="$(mktemp -d -t istatserver.XXXXXX)"
+  trap 'rm -rf "$WORKDIR"' EXIT
+  echo "Using temp build dir: $WORKDIR"
+}
+
+fetch_source() {
+  echo "Downloading ${REPO}@${BRANCH}…"
+  need_root true >/dev/null 2>&1 || :
+  curl -fsSL "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" -o "$WORKDIR/src.tar.gz"
+  mkdir -p "$WORKDIR/src"
+  tar -xzf "$WORKDIR/src.tar.gz" -C "$WORKDIR/src" --strip-components=1
+}
+
+build_install() {
+  cd "$WORKDIR/src"
+  echo "Bootstrapping…"
+  ./autogen >/dev/null
+  echo "Configuring…"
+  ./configure >/dev/null
+  echo "Building…"
+  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)" >/dev/null
+  echo "Installing…"
+  need_root make install >/dev/null
+}
+
+ensure_user_group() {
+  # Run service as unprivileged 'istat' user/group
+  if ! id -u istat >/dev/null 2>&1; then
+    echo "Creating service user 'istat'…"
+    need_root /usr/sbin/groupadd -r istat 2>/dev/null || true
+    need_root /usr/sbin/useradd -r -g istat -d /usr/local/etc/istatserver -s /usr/sbin/nologin istat 2>/dev/null || true
+  fi
+  need_root mkdir -p /usr/local/etc/istatserver
+  need_root chown -R istat:istat /usr/local/etc/istatserver
+}
+
+install_rapl_udev_rule() {
+  # Make RAPL energy counters world-readable so non-root can read power
+  RULE='/etc/udev/rules.d/99-rapl-read.rules'
+  echo "Installing RAPL udev rule at ${RULE}…"
+  need_root sh -c "printf '%s\n' 'SUBSYSTEM==\"powercap\", KERNEL==\"intel-rapl:*\", TEST==\"%S%p/energy_uj\", RUN+=\"/bin/chmod 0444 %S%p/energy_uj\"' > '${RULE}'"
+  need_root udevadm control --reload-rules || true
+  need_root udevadm trigger --subsystem-match=powercap || true
+}
+
+install_systemd_unit() {
+  if ! command_exists systemctl; then
+    echo "systemd not detected. Skipping unit install." >&2
+    return 0
+  fi
+
+  UNIT=/etc/systemd/system/istatserver.service
+  echo "Installing systemd unit: ${UNIT}"
+  need_root tee "$UNIT" >/dev/null <<'UNIT_EOF'
+[Unit]
+Description=iStat Server for remote monitoring with iStat for iOS or iStat for macOS
+Documentation=man:istatserver(1)
+After=network-online.target systemd-udevd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=istat
+Group=istat
+ExecStart=/usr/local/bin/istatserver
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=istatserver
+# If your build writes a pid when -d is used, we run in foreground so no pid is needed.
+
+# Hardening (relaxed enough for reading sensors via sysfs)
+NoNewPrivileges=true
+LockPersonality=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+
+  need_root systemctl daemon-reload
+  need_root systemctl enable --now istatserver
+}
+
+print_summary() {
+  echo
+  echo "✅ iStat Server installed from ${REPO}@${BRANCH}"
+  echo "   Binary:        /usr/local/bin/istatserver"
+  echo "   Config dir:    /usr/local/etc/istatserver/"
+  echo "   Service user:  istat"
+  if command_exists systemctl; then
+    echo "   Systemd unit:  istatserver.service (enabled)"
+    echo
+    echo "Status:"
+    need_root systemctl --no-pager --full status istatserver || true
+  else
+    echo
+    echo "Run manually:"
+    echo "   sudo -u istat /usr/local/bin/istatserver"
+  fi
+  echo
+  echo "Note: RAPL power counters were made world-readable via udev so"
+  echo "      the service can read /sys/class/powercap/intel-rapl:*/energy_uj."
+}
+
+main() {
+  install_deps
+  make_build_dir
+  fetch_source
+  build_install
+  ensure_user_group
+  install_rapl_udev_rule
+  install_systemd_unit
+  print_summary
+}
+
+main "$@"
