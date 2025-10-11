@@ -30,8 +30,10 @@
  */
 
 #include "StatBase.h"
-#include <dirent.h>
-#include <sys/stat.h>
+#include <string>
+#include <vector>
+#include <deque>
+
 #ifndef _STATSSENSORS_H
 #define _STATSSENSORS_H
 
@@ -66,8 +68,7 @@ class StatsSensors : public StatsBase
 		#ifdef HAVE_LIBSENSORS
 		void init_libsensors();
 		#endif
-		void init_sysfs_cpufreq();
-		void update_sysfs_cpufreq(long long sampleID);
+
 		void update(long long sampleID);
 		void update_qnap(long long sampleID);
 		void update_dev_cpu(long long sampleID);
@@ -81,21 +82,26 @@ class StatsSensors : public StatsBase
 		int createSensor(std::string key);
 		void processSensor(std::string key, long long sampleID, double value);
 
-struct RaplDomain {
-    std::string path;      // /sys/class/powercap/intel-rapl:0 or :0:1
-    std::string name;      // "package-0", "core", "uncore", "dram", ...
-    std::string key;       // sensor uuid key, e.g. "rapl:package-0"
-    long long   last_uj = -1;
-    double      last_time = 0.0;
-    long long   wrap_uj = 0;   // from max_energy_range_uj
-RaplDomain() = default;
-};
+		struct RaplDomain {
+			std::string path;
+			std::string name;
+			std::string key;
+			long long wrap_uj = 0;
+			long long last_uj = -1;
+			double    last_time = 0.0;
+		};
+		std::vector<RaplDomain> rapl_;
 
-std::vector<RaplDomain> rapl_;
-
-void init_rapl();
-void update_rapl(long long sampleID);
-
+		// Decls
+		void init_sysfs_thermal();
+		void update_sysfs_thermal(long long sampleID);
+		void init_sysfs_cpufreq();
+		void update_sysfs_cpufreq(long long sampleID);
+		void init_sysfs_devfreq_gpu();
+		void update_sysfs_devfreq_gpu(long long sampleID);
+		void init_rapl();
+		void update_rapl(long long sampleID);
+		
 		#ifdef HAVE_LIBSENSORS
 		bool libsensors_ready;
 		#if SENSORS_API_VERSION >= 0x0400 /* libsensor 4 */

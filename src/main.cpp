@@ -49,6 +49,8 @@
 #include <iostream>
 #include <fstream>
 #include <stdlib.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #ifdef HAVE_CONFIG_H
 # include "config.h"
@@ -304,18 +306,21 @@ int main(int argc, char ** argv)
 }
 
 SSL_CTX* InitServerCTX(void)
-{   
-	SSL_library_init();
-
+{
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+    SSL_library_init();
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
+#else
+    OPENSSL_init_ssl(0, NULL);
+#endif
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
     SSL_CTX *ctx = SSL_CTX_new(TLSv1_server_method());
 #else
     SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
 #endif
-    
+
     if ( ctx == NULL )
     {
         ERR_print_errors_fp(stdout);
@@ -325,6 +330,8 @@ SSL_CTX* InitServerCTX(void)
 
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+    // Legacy: set temporary ECDH params via EC_KEY (pre-1.1.0)
     EC_KEY *ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (ecdh == NULL) {
         cout << "Failed to get EC curve" << endl;
@@ -333,6 +340,15 @@ SSL_CTX* InitServerCTX(void)
     }
     SSL_CTX_set_tmp_ecdh(ctx, ecdh);
     EC_KEY_free(ecdh);
+#else
+    // Modern: prefer named groups list (avoids deprecated EC_KEY APIs)
+    if (SSL_CTX_set1_groups_list(ctx, "P-256") != 1) {
+        ERR_print_errors_fp(stdout);
+        fflush(stdout);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+#endif
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
     DH *dh = get_dh2236();
@@ -343,6 +359,10 @@ SSL_CTX* InitServerCTX(void)
     }
     SSL_CTX_set_tmp_dh(ctx, dh);
     DH_free(dh);
+#endif
+
+#ifdef TLS1_2_VERSION
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
 #endif
 
     return ctx;

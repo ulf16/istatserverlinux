@@ -32,31 +32,95 @@
 #include "Certificate.h"
 #include <cstdio>
 #include <iostream>
+#include <openssl/bn.h>
+#include <openssl/evp.h>
 
 using namespace std;
 
-/* Generates a 2048-bit RSA key. */
+/* Generates a 2048-bit RSA key (modern OpenSSL API). */
 EVP_PKEY * generate_key()
 {
-    /* Allocate memory for the EVP_PKEY structure. */
-    EVP_PKEY * pkey = EVP_PKEY_new();
-    if(!pkey)
-    {
-        std::cerr << "Unable to create EVP_PKEY structure." << std::endl;
-        return NULL;
+    EVP_PKEY *pkey = nullptr;
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+    if (!ctx) { std::cerr << "Unable to create EVP_PKEY_CTX.\n"; return nullptr; }
+
+    if (EVP_PKEY_keygen_init(ctx) <= 0) {
+        std::cerr << "EVP_PKEY_keygen_init failed.\n";
+        EVP_PKEY_CTX_free(ctx);
+        return nullptr;
     }
-    
-    /* Generate the RSA key and assign it to pkey. */
-    RSA * rsa = RSA_generate_key(2048, RSA_F4, NULL, NULL);
-    if(!EVP_PKEY_assign_RSA(pkey, rsa))
-    {
-        std::cerr << "Unable to generate 2048-bit RSA key." << std::endl;
-        EVP_PKEY_free(pkey);
-        return NULL;
+
+    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0) {
+        std::cerr << "EVP_PKEY_CTX_set_rsa_keygen_bits failed.\n";
+        EVP_PKEY_CTX_free(ctx);
+        return nullptr;
     }
-    
-    /* The key has been generated, return it. */
+
+#  if OPENSSL_VERSION_NUMBER < 0x30000000L
+    // On 1.1.x it’s fine to set pubexp explicitly:
+    BIGNUM *e = BN_new();
+    if (!e || BN_set_word(e, RSA_F4) != 1) {
+        std::cerr << "Unable to allocate/set RSA exponent.\n";
+        if (e) BN_free(e);
+        EVP_PKEY_CTX_free(ctx);
+        return nullptr;
+    }
+    if (EVP_PKEY_CTX_set_rsa_keygen_pubexp(ctx, e) <= 0) {
+        std::cerr << "EVP_PKEY_CTX_set_rsa_keygen_pubexp failed.\n";
+        BN_free(e);
+        EVP_PKEY_CTX_free(ctx);
+        return nullptr;
+    }
+    BN_free(e);
+#  endif // < 3.0 (on 3.0+ we rely on the default 65537)
+
+    if (EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+        std::cerr << "EVP_PKEY_keygen failed.\n";
+        EVP_PKEY_CTX_free(ctx);
+        return nullptr;
+    }
+
+    EVP_PKEY_CTX_free(ctx);
     return pkey;
+
+#else
+    // Very old OpenSSL (pre‑1.1.0) fallback using RSA_* (kept for maximum portability).
+    pkey = EVP_PKEY_new();
+    if (!pkey) {
+        std::cerr << "Unable to create EVP_PKEY structure." << std::endl;
+        return nullptr;
+    }
+
+    RSA *rsa = RSA_new();
+    BIGNUM *bn = BN_new();
+    if (!rsa || !bn) {
+        std::cerr << "Unable to allocate RSA/BIGNUM." << std::endl;
+        if (bn) BN_free(bn);
+        if (rsa) RSA_free(rsa);
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+
+    if (BN_set_word(bn, RSA_F4) != 1 || RSA_generate_key_ex(rsa, 2048, bn, nullptr) != 1) {
+        std::cerr << "RSA key generation failed." << std::endl;
+        BN_free(bn);
+        RSA_free(rsa);
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+    BN_free(bn);
+
+    if (EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
+        std::cerr << "EVP_PKEY_assign_RSA failed." << std::endl;
+        RSA_free(rsa);
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+
+    return pkey;
+#endif
 }
 
 /* Generates a self-signed x509 certificate. */
@@ -92,7 +156,7 @@ X509 * generate_x509(EVP_PKEY * pkey)
     X509_set_issuer_name(x509, name);
     
     /* Actually sign the certificate with our key. */
-    if(!X509_sign(x509, pkey, EVP_sha1()))
+    if(!X509_sign(x509, pkey, EVP_sha256()))
     {
         std::cerr << "Error signing certificate." << std::endl;
         X509_free(x509);

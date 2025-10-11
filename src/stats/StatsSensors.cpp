@@ -30,46 +30,74 @@
  */
 
 
-
 #include "StatsSensors.h"
+
+/* Standard C/C++ headers needed here */
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
+#include <cerrno>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <deque>
+#include <sstream>
+#include <map>
+
+/* POSIX / system headers */
+#include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <cstdio>
-#include <cerrno>
 #include <fcntl.h>
+
+#ifdef HAVE_LIBSENSORS
+  /* libsensors API */
+  #include <sensors/sensors.h>
+  #include <sensors/error.h>
+#endif
 
 using namespace std;
 
-#ifdef HAVE_LIBSENSORS
-#if SENSORS_API_VERSION >= 0x0400 /* libsensor 4 */
-
-#include <sensors/error.h>
-
-const char* sensors_feature_type_name(int feature_type) {
-    switch (feature_type) {
-        case SENSORS_FEATURE_IN: return "in";
-        case SENSORS_FEATURE_FAN: return "fan";
-        case SENSORS_FEATURE_TEMP: return "temp";
-        case SENSORS_FEATURE_POWER: return "power";
-        case SENSORS_FEATURE_ENERGY: return "energy";
-        case SENSORS_FEATURE_CURR: return "curr";
-        case SENSORS_FEATURE_HUMIDITY: return "humidity";
-        default: return "unknown";
-    }
+// Ensure Linux-specific headers for helpers using open/read/close/errno/O_CLOEXEC
+#ifdef __linux__
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+// ---- Linux sysfs helpers (shared) ----
+static bool read_sysfs_ll(const std::string &path, long long &out) {
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return false;
+    long long v = 0; int rc = fscanf(f, "%lld", &v);
+    fclose(f); if (rc != 1) return false;
+    out = v; return true;
 }
-
-const char* sensors_subfeature_type_name(int subfeature_type) {
-    switch (subfeature_type) {
-        case SENSORS_SUBFEATURE_IN_INPUT: return "in_input";
-        case SENSORS_SUBFEATURE_FAN_INPUT: return "fan_input";
-        case SENSORS_SUBFEATURE_TEMP_INPUT: return "temp_input";
-        case SENSORS_SUBFEATURE_POWER_INPUT: return "power_input";
-        // Add other cases as necessary
-        default: return "unknown";
-    }
+static bool read_sysfs_string(const std::string &path, std::string &out) {
+    FILE *f = fopen(path.c_str(), "r"); if (!f) return false;
+    char buf[256]; size_t n = fread(buf,1,sizeof(buf)-1,f); fclose(f);
+    if (!n) {
+    return false;
+	}
+	buf[n] = '\0';
+    while (n && (buf[n-1]=='\n'||buf[n-1]=='\r'||buf[n-1]==' '||buf[n-1]=='\t')) buf[--n]='\0';
+    out.assign(buf); return true;
 }
-
+static std::string pretty_thermal_label(const std::string &type) {
+    // cpuN[-...] -> "CPU N" or just "CPU" if no index
+    if (type.rfind("cpu", 0) == 0) {
+        size_t i = 3; std::string num;
+        while (i < type.size() && std::isdigit((unsigned char)type[i])) { num.push_back(type[i++]); }
+        return num.empty() ? std::string("CPU") : std::string("CPU ") + num;
+    }
+    // gpuN/maliN -> "GPU N" (or just "GPU")
+    if (type.rfind("gpu", 0) == 0 || type.rfind("mali", 0) == 0) {
+        size_t i = (type.rfind("gpu", 0) == 0) ? 3 : 4; std::string num;
+        while (i < type.size() && std::isdigit((unsigned char)type[i])) { num.push_back(type[i++]); }
+        return num.empty() ? std::string("GPU") : std::string("GPU ") + num;
+    }
+    if (type.rfind("ddr", 0) == 0 || type.rfind("mem", 0) == 0) return "Memory";
+    if (type == "soc-thermal" || type == "soc_thermal") return "SoC";
+    return type;
+}
 static bool read_longlong(const std::string &path, long long &out) {
     int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -112,163 +140,14 @@ static bool read_string(const std::string &path, std::string &out) {
     out.assign(buf);
     return true;
 }
+#endif
 
-/*
-string createKey(const sensors_chip_name *chip, const sensors_subfeature *subfeature) {
-    char chipName[128];
-    sensors_snprintf_chip_name(chipName, sizeof(chipName), chip);
-    stringstream keyStream;
-    keyStream << chipName << "_" << subfeature->type;
-    return keyStream.str();
-}
-*/
-
-/*void StatsSensors::update_libsensors(long long sampleID)
-{
-	int a, b, c, num;
-	const sensors_chip_name * chip;
-	const sensors_feature * features;
-	const sensors_subfeature * subfeatures;
-
-	a = num = 0;
-
-	while ((chip = sensors_get_detected_chips(NULL, &a)))
-	{
-		b = 0;
-		while ((features = sensors_get_features(chip, &b)))
-		{
-			c = 0;
-			while ((subfeatures = sensors_get_all_subfeatures(chip, features, &c)))
-			{
-				if (subfeatures->type == SENSORS_SUBFEATURE_FAN_INPUT ||
-					subfeatures->type == SENSORS_SUBFEATURE_CURR_INPUT ||
-					subfeatures->type == SENSORS_SUBFEATURE_POWER_INPUT ||
-					subfeatures->type == SENSORS_SUBFEATURE_IN_INPUT ||
-					subfeatures->type == SENSORS_SUBFEATURE_VID ||
-					subfeatures->type == SENSORS_SUBFEATURE_TEMP_INPUT)
-				{
-
-  //if (chip->bus == SENSORS_CHIP_NAME_BUS_ISA)
-  //  printf ("%s-isa-%04x", chip->prefix, chip->addr);
-  //else
-   // printf ("%s\n", chip->prefix);
-    //fflush(stdout);
-
-
-					char *label = sensors_get_label(chip, features);
-					stringstream key;
-					key << label << "_" << sensorType(subfeatures->type);
-
-					if(createSensor(key.str()) == 1)
-					{
-						for (vector<sensor_info>::iterator cur = _items.begin(); cur != _items.end(); ++cur)
-						{
-							if((*cur).key == key.str())
-							{
-								(*cur).method = 1;
-								(*cur).chip = chip->addr;
-								(*cur).sensor = features->number;
-								(*cur).label = string(label);
-								(*cur).kind = sensorType(subfeatures->type);					
-							}
-						}
-					}
-
-					double value;
-  					sensors_get_value(chip, subfeatures->number, &value);
-
-					processSensor(key.str(), sampleID, value);
-
-					free(label);
-
-					num++;
-				}
-			}
-		}
-	}
-}
-*/
+#ifdef HAVE_LIBSENSORS
+#if SENSORS_API_VERSION >= 0x0400 /* libsensor 4 */
 
 void StatsSensors::update_libsensors(long long sampleID)
 {
-    int a, b, c, num;
-    const sensors_chip_name *chip;
-    const sensors_feature *features;
-    const sensors_subfeature *subfeatures;
-
-    a = num = 0;
-    while ((chip = sensors_get_detected_chips(NULL, &a)))
-    {
-        // Print chip information
-        //char chip_name[128];
-        //sensors_snprintf_chip_name(chip_name, sizeof(chip_name), chip);
-        //printf("Chip: %s\n", chip_name);
-
-        b = 0;
-        while ((features = sensors_get_features(chip, &b)))
-        {
-            // Print feature information
-            // printf("  Feature #%d (%s): %s\n", features->number, sensors_get_label(chip, features), sensors_feature_type_name(features->type));
-
-            c = 0;
-            while ((subfeatures = sensors_get_all_subfeatures(chip, features, &c)))
-            {
-                // Print subfeature information
-                // printf("    Subfeature (%s): %s\n", sensors_subfeature_type_name(subfeatures->type), subfeatures->name);
-
-                if (subfeatures->type == SENSORS_SUBFEATURE_FAN_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_CURR_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_POWER_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_IN_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_VID ||
-                    subfeatures->type == SENSORS_SUBFEATURE_TEMP_INPUT)
-                {
-                    char *label = sensors_get_label(chip, features);
-                    stringstream key;
-                    key << label << "_" << sensorType(subfeatures->type);
-
-                    if(createSensor(key.str()) == 1)
-                    {
-                        for (vector<sensor_info>::iterator cur = _items.begin(); cur != _items.end(); ++cur)
-                        {
-                            if((*cur).key == key.str())
-                            {
-                                (*cur).method = 1;
-                                (*cur).chip = chip->addr;
-                                (*cur).sensor = features->number;
-                                (*cur).label = string(label);
-                                (*cur).kind = sensorType(subfeatures->type);                            
-                            }
-                        }
-                    }
-                    double value;
-                    sensors_get_value(chip, subfeatures->number, &value);
-                    processSensor(key.str(), sampleID, value);
-                    free(label);
-                    num++;
-                }
-            }
-        }
-    }
-}
-
-
-/*
-void updateSensorData(const sensors_chip_name *chip, const sensors_subfeature *subfeature) {
-    double sensorValue;
-    int result = sensors_get_value(chip, subfeature->number, &sensorValue);
-    if (result == 0) { // Successfully read the sensor value
-        string sensorKey = createKey(chip, subfeature);
-        long long sampleID = getCurrentSampleID(); // This function needs to be defined or modified as per your application
-        processSensor(sensorKey, sampleID, sensorValue);
-    } else {
-        cerr << "Failed to read sensor value: " << sensors_strerror(result) << endl;
-    }
-}
-*/
-/*
-void StatsSensors::update_libsensors(long long sampleID) {
-    int a = 0, b, c;
+    int a = 0, b, c, num = 0;
     const sensors_chip_name *chip;
     const sensors_feature *features;
     const sensors_subfeature *subfeatures;
@@ -278,80 +157,59 @@ void StatsSensors::update_libsensors(long long sampleID) {
         while ((features = sensors_get_features(chip, &b))) {
             c = 0;
             while ((subfeatures = sensors_get_all_subfeatures(chip, features, &c))) {
-                if (subfeatures->type == SENSORS_SUBFEATURE_FAN_INPUT ||
+                // Only process readable inputs we care about
+                if (!(subfeatures->flags & SENSORS_MODE_R)) continue;
+
+                if (subfeatures->type == SENSORS_SUBFEATURE_FAN_INPUT  ||
                     subfeatures->type == SENSORS_SUBFEATURE_CURR_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_POWER_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_IN_INPUT ||
-                    subfeatures->type == SENSORS_SUBFEATURE_VID ||
+                    subfeatures->type == SENSORS_SUBFEATURE_POWER_INPUT||
+                    subfeatures->type == SENSORS_SUBFEATURE_IN_INPUT   ||
+                    subfeatures->type == SENSORS_SUBFEATURE_VID        ||
                     subfeatures->type == SENSORS_SUBFEATURE_TEMP_INPUT) {
 
-                    if (subfeatures->flags & SENSORS_MODE_R) { // Check if the subfeature is readable
-                        double value;
-                        if (sensors_get_value(chip, subfeatures->number, &value) == 0) {
-                            stringstream key;
-                            char *label = sensors_get_label(chip, features);
-                            key << label << "_" << sensorType(subfeatures->type);
-                            free(label);  // Clean up label
-                            //processSensor(key.str(), sampleID, value);
-                            if (createSensor(key.str()) == 1) {
-                                // Assuming createSensor populates _items with new sensor data
-                            //    updateSensorData(chip, subfeatures);  // Process the sensor data
-                            processSensor(key.str(), sampleID, value);
+                    char *label = sensors_get_label(chip, features); // must free()
+                    if (!label) continue;
+
+                    std::stringstream key;
+                    key << label << "_" << sensorType(subfeatures->type);
+
+                    if (createSensor(key.str()) == 1) {
+                        for (std::vector<sensor_info>::iterator cur = _items.begin(); cur != _items.end(); ++cur) {
+                            if ((*cur).key == key.str()) {
+                                (*cur).method = 1;                // libsensors
+                                (*cur).chip   = chip->addr;
+                                (*cur).sensor = features->number;
+                                (*cur).label  = std::string(label);
+                                (*cur).kind   = sensorType(subfeatures->type);
+                                break;
                             }
                         }
                     }
+
+                    double value = 0.0;
+                    if (sensors_get_value(chip, subfeatures->number, &value) == 0) {
+                        processSensor(key.str(), sampleID, value);
+                    }
+                    free(label);
+                    ++num;
                 }
             }
         }
     }
 }
-*/
 
-
-/*int StatsSensors::sensorType(int type)
-{
-	switch(type)
-	{
-		case SENSORS_SUBFEATURE_FAN_INPUT:
-			return 2;
-		break;
-		case SENSORS_SUBFEATURE_CURR_INPUT:
-			return 4;
-		break;
-		case SENSORS_SUBFEATURE_POWER_INPUT:
-			return 5;
-		break;
-		case SENSORS_SUBFEATURE_IN_INPUT:
-		case SENSORS_SUBFEATURE_VID:
-			return 3;
-		break;
-		default:
-			return 0;
-		break;
-	}
-	return 0;
-}*/
 int StatsSensors::sensorType(int type)
 {
-    switch(type)
-    {
-        case SENSORS_SUBFEATURE_FAN_INPUT:
-            return 2;
-        case SENSORS_SUBFEATURE_CURR_INPUT:
-            return 4;
-        case SENSORS_SUBFEATURE_POWER_INPUT:
-            return 5;
+    switch (type) {
+        case SENSORS_SUBFEATURE_TEMP_INPUT:  return 1; // temperature
+        case SENSORS_SUBFEATURE_FAN_INPUT:   return 2; // fan
         case SENSORS_SUBFEATURE_IN_INPUT:
-        case SENSORS_SUBFEATURE_VID:
-            return 3;
-        case SENSORS_SUBFEATURE_TEMP_INPUT:
-            return 1; // Ensure this is correctly handled
-        default:
-            return 0;
+        case SENSORS_SUBFEATURE_VID:         return 3; // voltage
+        case SENSORS_SUBFEATURE_CURR_INPUT:  return 4; // current
+        case SENSORS_SUBFEATURE_POWER_INPUT: return 5; // power
+        default:                             return 0; // unknown/other
     }
-    return 0;
 }
-
 #elif SENSORS_API_VERSION < 0x0400 /* libsensor 3 and earlier */
 
 void StatsSensors::update_libsensors(long long sampleID)
@@ -634,162 +492,190 @@ void StatsSensors::update_acpi_freq(long long sampleID)
 	}
 #endif
 }
+void StatsSensors::init_sysfs_thermal() {
+#if defined(__linux__)
+    // First pass: count zones per type
+    std::map<std::string,int> type_counts;
+    DIR *d1 = opendir("/sys/class/thermal");
+    if (d1) {
+        struct dirent *e;
+        while ((e = readdir(d1))) {
+            if (strncmp(e->d_name, "thermal_zone", 12) != 0) continue;
+            std::string base = std::string("/sys/class/thermal/") + e->d_name;
+            std::string type;
+            if (!read_sysfs_string(base + "/type", type)) continue;
+            type_counts[type]++;
+        }
+        closedir(d1);
+    }
 
-static bool read_ll_file(const std::string &path, long long &out) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return false;
-    char buf[64];
-    ssize_t n = read(fd, buf, sizeof(buf)-1);
-    close(fd);
-    if (n <= 0) return false;
-    buf[n] = '\0';
-    char *end = buf;
-    errno = 0;
-    long long v = strtoll(buf, &end, 10);
-    if (errno || end == buf) return false;
-    out = v;
-    return true;
+    // Second pass: create sensors with stable keys and neat labels
+    DIR *dir = opendir("/sys/class/thermal"); if (!dir) return;
+    std::map<std::string,int> type_seen; // running index per type
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (strncmp(ent->d_name, "thermal_zone", 12) != 0) continue;
+        std::string base = std::string("/sys/class/thermal/") + ent->d_name;
+        std::string type; long long raw;
+        if (!read_sysfs_string(base + "/type", type)) continue;
+        if (!read_sysfs_ll(base + "/temp", raw)) continue;
+
+        int zone = atoi(ent->d_name + 12); // keep key stable on zone id
+        std::string key = "thermal:" + type + ":" + std::to_string(zone);
+
+        // Build neat label: pretty base + optional index when multiple of same type exist
+        std::string base_label = pretty_thermal_label(type);
+        int &seen = type_seen[type];
+        int total = type_counts[type];
+        std::string label = base_label;
+        bool ends_with_digit = !base_label.empty() && std::isdigit((unsigned char)base_label.back());
+        if (total > 1 && !ends_with_digit) {
+            label += " " + std::to_string(seen);
+        }
+        seen++;
+
+        if (createSensor(key) == 1) {
+            for (auto &s : _items) if (s.key == key) {
+                s.method = 10; // Linux sysfs thermal
+                s.kind   = 0;  // temperature
+                s.label  = label;
+                break;
+            }
+        }
+    }
+    closedir(dir);
+#endif
+}
+void StatsSensors::update_sysfs_thermal(long long sampleID) {
+#if defined(__linux__)
+    DIR *dir = opendir("/sys/class/thermal"); if (!dir) return;
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (strncmp(ent->d_name, "thermal_zone", 12) != 0) continue;
+        std::string base = std::string("/sys/class/thermal/")+ent->d_name;
+        std::string type; long long raw = 0;
+        if (!read_sysfs_string(base + "/type", type)) continue;
+        if (!read_sysfs_ll(base + "/temp", raw)) continue;
+        int zone = atoi(ent->d_name + 12);
+        std::string key = "thermal:" + type + ":" + std::to_string(zone);
+        processSensor(key, sampleID, (double)raw / 1000.0);
+    }
+    closedir(dir);
+#endif
 }
 
 void StatsSensors::init_sysfs_cpufreq() {
 #if defined(__linux__)
-    // Prefer per-policy paths (present with intel_pstate)
     bool any = false;
-    for (int p = 0; p < 64; ++p) {
-        char test[256];
-        snprintf(test, sizeof(test),
-                 "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", p);
-        struct stat st{};
-        if (stat(test, &st) != 0) continue;
+    // Prefer policies
+    for (int p = 0; p < 128; ++p) {
+        char test[256]; snprintf(test,sizeof(test),"/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq",p);
+        if (access(test, R_OK) != 0) continue;
 
-        // Determine which CPUs belong to this policy
-        char rel_path[256];
-        snprintf(rel_path, sizeof(rel_path),
-                 "/sys/devices/system/cpu/cpufreq/policy%d/related_cpus", p);
-        std::string related;
-        {
-            FILE *f = fopen(rel_path, "r");
-            if (f) {
-                char buf[256]; size_t n = fread(buf,1,sizeof(buf)-1,f); fclose(f);
-                buf[n] = '\0';
-                related.assign(buf);
-            }
-        }
-        // Parse CPU list line (e.g., "0 1" or "0-3")
+        // Try to map CPUs in this policy
+        std::string rel; read_sysfs_string(
+            (std::string("/sys/devices/system/cpu/cpufreq/policy")+std::to_string(p)+"/related_cpus"), rel);
         std::vector<int> cpus;
-        if (!related.empty()) {
-            // very small parser: split on space and dashes
-            int a=-1,b=-1;
-            const char *s = related.c_str();
+        if (!rel.empty()) {
+            const char *s = rel.c_str();
             while (*s) {
-                while (*s==' '||*s=='\n'||*s=='\t') ++s;
-                if (!*s) break;
-                a = strtol(s, (char**)&s, 10);
+                while (*s == ' ' || *s == '\n' || *s == '\t') {
+ 				   ++s;
+				}
+				if (!*s) {
+    				break;
+				}
+                int a = strtol(s,(char**)&s,10), b=a;
                 if (*s=='-') { ++s; b = strtol(s,(char**)&s,10); }
-                else b = a;
                 for (int i=a;i<=b;i++) cpus.push_back(i);
             }
         }
-
         if (cpus.empty()) {
-            // Fallback: just create one “policy p” sensor
-            std::stringstream key, label;
-            key   << "cpufreq:policy" << p;
-            label << "CPU policy " << p << " Frequency";
-            if (createSensor(key.str()) == 1) {
-                for (auto &s : _items) if (s.key == key.str()) {
-                    s.method = 7;   // new method id for Linux cpufreq
-                    s.kind   = 8;   // “frequency” type in your UI mapping
-                    s.label  = label.str();
-                }
+            std::string key = "cpufreq:policy"+std::to_string(p);
+            if (createSensor(key)==1) for (auto &s:_items) if (s.key==key) {
+                s.method=11; s.kind=8; s.label="CPU policy "+std::to_string(p)+" Frequency";
             }
-            any = true;
-            continue;
+            any = true; continue;
         }
-
-        // Create one sensor per CPU in this policy
         for (int cpu : cpus) {
-            std::stringstream key, label;
-            key   << "cpufreq:cpu" << cpu;
-            label << "CPU " << cpu << " Frequency";
-            if (createSensor(key.str()) == 1) {
-                for (auto &s : _items) if (s.key == key.str()) {
-                    s.method = 7;
-                    s.kind   = 8;
-                    s.label  = label.str();
-                }
+            std::string key = "cpu" + std::to_string(cpu) + "_freq";
+            if (createSensor(key)==1) for (auto &s:_items) if (s.key==key) {
+                s.method=11; s.kind=8; s.label="CPU "+std::to_string(cpu)+" Frequency";
             }
             any = true;
         }
     }
-
-    // If no policy* paths, try per-CPU cpufreq directories
+    // Fallback per-CPU directories
     if (!any) {
-        for (int cpu = 0; cpu < 256; ++cpu) {
-            char test[256];
-            snprintf(test, sizeof(test),
-                     "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu);
-            struct stat st{};
-            if (stat(test, &st) != 0) continue;
-
-            std::stringstream key, label;
-            key   << "cpufreq:cpu" << cpu;
-            label << "CPU " << cpu << " Frequency";
-            if (createSensor(key.str()) == 1) {
-                for (auto &s : _items) if (s.key == key.str()) {
-                    s.method = 7;
-                    s.kind   = 8;
-                    s.label  = label.str();
-                }
+        DIR *dir = opendir("/sys/devices/system/cpu"); if (!dir) return;
+        struct dirent *e;
+        while ((e = readdir(dir))) {
+            if (strncmp(e->d_name,"cpu",3)!=0 || !isdigit((unsigned char)e->d_name[3])) continue;
+            int cpu = atoi(e->d_name+3);
+            std::string path = std::string("/sys/devices/system/cpu/")+e->d_name+"/cpufreq/scaling_cur_freq";
+            if (access(path.c_str(), R_OK) != 0) continue;
+            std::string key = "cpu" + std::to_string(cpu) + "_freq";
+            if (createSensor(key)==1) for (auto &s:_items) if (s.key==key) {
+                s.method=11; s.kind=8; s.label="CPU "+std::to_string(cpu)+" Frequency";
             }
         }
+        closedir(dir);
     }
 #endif
 }
-
 void StatsSensors::update_sysfs_cpufreq(long long sampleID) {
 #if defined(__linux__)
-    // Update per-CPU
-    for (int cpu = 0; cpu < 256; ++cpu) {
-        std::stringstream key;
-        key << "cpufreq:cpu" << cpu;
-        bool have = false;
-        for (auto &s : _items) if (s.key == key.str()) { have = true; break; }
+    // per-CPU updates
+    for (int cpu=0; cpu<256; ++cpu) {
+        std::string key = "cpu" + std::to_string(cpu) + "_freq";
+        bool have=false; for (auto &s:_items) if (s.key==key){have=true;break;}
         if (!have) continue;
-
-        char path[256];
-        // Prefer per-policy mapping if exists: policyX often includes cpu list,
-        // but for updating we can read per-cpu if available, else policy0
-        snprintf(path, sizeof(path),
-                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu);
-        long long khz = 0;
-        if (!read_ll_file(path, khz)) {
-            // fallback: policy of cpu (most systems: cpuN -> policyN or policy0)
-            snprintf(path, sizeof(path),
-                     "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", cpu);
-            if (!read_ll_file(path, khz)) continue;
+        char p1[256]; snprintf(p1,sizeof(p1),"/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq",cpu);
+        long long khz=0;
+        if (!read_sysfs_ll(p1, khz)) {
+            char p2[256]; snprintf(p2,sizeof(p2),"/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq",cpu);
+            if (!read_sysfs_ll(p2, khz)) continue;
         }
-        // Convert kHz -> MHz (guard against Hz outliers)
-        double mhz = (khz > 100000) ? (khz / 1000.0) : (double)khz / 1000000.0;
-        processSensor(key.str(), sampleID, mhz);
+        double mhz = khz / 1000.0;
+        processSensor(key, sampleID, mhz);
     }
-
-    // Update policy-level fallbacks
-    for (int p = 0; p < 64; ++p) {
-        std::stringstream key;
-        key << "cpufreq:policy" << p;
-        bool have = false;
-        for (auto &s : _items) if (s.key == key.str()) { have = true; break; }
+    // policy updates
+    for (int p=0; p<128; ++p) {
+        std::string key = "cpufreq:policy"+std::to_string(p);
+        bool have=false; for (auto &s:_items) if (s.key==key){have=true;break;}
         if (!have) continue;
-
-        char path[256];
-        snprintf(path, sizeof(path),
-                 "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", p);
-        long long khz = 0;
-        if (!read_ll_file(path, khz)) continue;
-        double mhz = (khz > 100000) ? (khz / 1000.0) : (double)khz / 1000000.0;
-        processSensor(key.str(), sampleID, mhz);
+        char path[256]; snprintf(path,sizeof(path),"/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq",p);
+        long long khz=0; if (!read_sysfs_ll(path,khz)) continue;
+        processSensor(key, sampleID, khz/1000.0);
     }
+#endif
+}
+static bool find_gpu_devfreq_cur(std::string &out) {
+    long long tmp;
+    if (read_sysfs_ll("/sys/class/devfreq/ffe40000.gpu/cur_freq", tmp)) { out = "/sys/class/devfreq/ffe40000.gpu/cur_freq"; return true; }
+    DIR *d = opendir("/sys/class/devfreq"); if (!d) return false;
+    struct dirent *de; 
+    while ((de=readdir(d))) {
+        if (de->d_name[0]=='.') continue;
+        std::string cand = std::string("/sys/class/devfreq/")+de->d_name+"/cur_freq";
+        if (read_sysfs_ll(cand, tmp)) { out=cand; closedir(d); return true; }
+    }
+    closedir(d); return false;
+}
+void StatsSensors::init_sysfs_devfreq_gpu() {
+#if defined(__linux__)
+    std::string path; long long hz;
+    if (!find_gpu_devfreq_cur(path)) return;
+    if (!read_sysfs_ll(path, hz)) return;
+    std::string key = "gpu_freq";
+    if (createSensor(key)==1) for (auto &s:_items) if (s.key==key) { s.method=12; s.kind=8; s.label="GPU Frequency"; }
+#endif
+}
+void StatsSensors::update_sysfs_devfreq_gpu(long long sampleID) {
+#if defined(__linux__)
+    std::string path; if (!find_gpu_devfreq_cur(path)) return;
+    long long hz=0; if (!read_sysfs_ll(path, hz)) return;
+    processSensor("gpu_freq", sampleID, (double)hz / 1.0e6);
 #endif
 }
 
@@ -821,8 +707,8 @@ void StatsSensors::init_rapl() {
         if (createSensor(dom.key) == 1) {
             for (auto &s : _items) {
                 if (s.key == dom.key) {
-                    s.method = 6;               // New method id for RAPL
-                    s.kind   = 5;               // Power (matches your mapping)
+                    s.method = 13;               // New method id for RAPL
+                    s.kind   = 5;               // Power (matches mapping)
                     s.label  = "CPU " + dom.name + " Power";
                 }
             }
@@ -867,11 +753,15 @@ void StatsSensors::update_rapl(long long sampleID) {
 /*
 Methods
 
-1 = libsensors
-2 = dev.cpu.(x).temperature
-3 = qnap
-4 = hw.acpi.thermal.tz(x).temperature"
-5 = dev.cpu.(x).freq
+1  = libsensors
+2  = dev.cpu.(x).temperature (BSD)
+3  = qnap
+4  = hw.acpi.thermal.tz(x).temperature (BSD)
+5  = dev.cpu.(x).freq (BSD)
+10 = Linux sysfs thermal (/sys/class/thermal)
+11 = Linux sysfs CPU freq (/sys/devices/system/cpu/.../cpufreq/scaling_cur_freq)
+12 = Linux sysfs GPU freq (/sys/class/devfreq/ * /cur_freq)
+13 = Linux Intel RAPL power (/sys/class/powercap/intel-rapl: * /energy_uj)
 
 */
 
@@ -887,8 +777,12 @@ void StatsSensors::init()
 	init_qnap();
 	init_acpi_thermal();
 	init_acpi_freq();
-	init_rapl();
-	init_sysfs_cpufreq();
+	#if defined(__linux__)
+		init_sysfs_thermal();
+		init_sysfs_cpufreq();
+		init_sysfs_devfreq_gpu();
+		init_rapl();
+	#endif
 }
 
 void StatsSensors::update(long long sampleID)
@@ -902,8 +796,12 @@ void StatsSensors::update(long long sampleID)
 	update_dev_cpu(sampleID);
 	update_acpi_thermal(sampleID);
 	update_acpi_freq(sampleID);
-	update_rapl(sampleID);
-	update_sysfs_cpufreq(sampleID);
+	#if defined(__linux__)
+		update_sysfs_thermal(sampleID);
+		update_sysfs_cpufreq(sampleID);
+		update_sysfs_devfreq_gpu(sampleID);
+		update_rapl(sampleID);
+	#endif
 
 	#ifdef USE_SQLITE
 	if(historyEnabled == true)
