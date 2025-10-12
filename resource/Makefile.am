@@ -37,12 +37,11 @@ install-exec-hook:
 		$(ADDUSER) -g istat istat >/dev/null 2>&1  || true ; \
 	fi
 
-	$(MKDIR) -p "$(DESTDIR)$(sysconfdir)";
-	$(MKDIR) -p "$(DESTDIR)$(sysconfdir)/istatserver/"
-	$(MKDIR) -p "/var/run/istatserver"  || true ;
-	chown istat:istat "/var/run/istatserver"  || true ;
-	chown istat:istat "$(DESTDIR)$(sysconfdir)/istatserver/"  || true ;
-	chmod 755 "$(DESTDIR)$(sysconfdir)/istatserver/"  || true ;
+	$(MKDIR) -p "$(DESTDIR)$(sysconfdir)"
+	$(MKDIR) -p "$(DESTDIR)$(sysconfdir)/istatserver"
+	@: # systemd will create /run/istatserver via RuntimeDirectory= ; don't touch /var/run here
+	chown istat:istat "$(DESTDIR)$(sysconfdir)/istatserver"  || true
+	chmod 0750 "$(DESTDIR)$(sysconfdir)/istatserver"         || true
 
 	@if test -f "$(DESTDIR)$(OLD_CONFIG_FILE)" ; then \
 		$(MV) "$(DESTDIR)$(OLD_CONFIG_FILE)" "$(DESTDIR)$(DEFAULT_CONFIG_FILE)" ; \
@@ -51,6 +50,7 @@ install-exec-hook:
 	@if test -f "/var/cache/istat/clients.dat" ; then \
 		$(MV) "/var/cache/istat/clients.dat" "$(DESTDIR)$(sysconfdir)/istatserver/clients.dat" ; \
 		chown istat:istat "$(DESTDIR)$(sysconfdir)/istatserver/clients.dat"  || true ; \
+		chmod 0600 "$(DESTDIR)$(sysconfdir)/istatserver/clients.dat"         || true ; \
 	fi
 
 	@if test -f "$(DESTDIR)$(DEFAULT_CONFIG_FILE)" ; then \
@@ -60,12 +60,14 @@ install-exec-hook:
 			../conf/istatserverconf || true ; \
 			rm "$(DESTDIR)$(DEFAULT_CONFIG_FILE_MV)" || true ; \
 			chown istat:istat "$(DESTDIR)$(DEFAULT_CONFIG_FILE)"  || true ; \
+			chmod 0640       "$(DESTDIR)$(DEFAULT_CONFIG_FILE)"  || true ; \
 	else \
 	        echo "$(INSTALL_DATA) istatserver.conf $(DESTDIR)$(DEFAULT_CONFIG_FILE)"; \
 	        $(INSTALL_DATA) "$(srcdir)/istatserver.conf" "$(DESTDIR)$(DEFAULT_CONFIG_FILE)"; \
 	        echo "$@ running conf updater and generating passcode"; \
 			../conf/istatserverconf -p || true ; \
 			chown istat:istat "$(DESTDIR)$(DEFAULT_CONFIG_FILE)"  || true ; \
+			chmod 0640       "$(DESTDIR)$(DEFAULT_CONFIG_FILE)"  || true ; \
 	fi
 
 	@if test -f "$(DESTDIR)$(DEFAULT_CONFIG_GENERATED_FILE)" ; then \
@@ -74,6 +76,24 @@ install-exec-hook:
 	        echo "$(INSTALL_DATA) istatserver_generated.conf $(DESTDIR)$(DEFAULT_CONFIG_GENERATED_FILE)"; \
 	        $(INSTALL_DATA) "$(srcdir)/istatserver_generated.conf" "$(DESTDIR)$(DEFAULT_CONFIG_GENERATED_FILE)"; \
 	fi
+
+	@: # If cert/key exist, lock them down
+	@if test -f "$(DESTDIR)$(CERT_FILE)" ; then \
+		chown istat:istat "$(DESTDIR)$(CERT_FILE)"  || true ; \
+		chmod 0644       "$(DESTDIR)$(CERT_FILE)"  || true ; \
+	fi
+	@if test -f "$(DESTDIR)$(KEY_FILE)" ; then \
+		chown istat:istat "$(DESTDIR)$(KEY_FILE)"  || true ; \
+		chmod 0600       "$(DESTDIR)$(KEY_FILE)"  || true ; \
+	fi
+
+	@: # Install the systemd unit if the directory is known
+if INSTALL_SYSTEMD_UNIT
+	@echo "Installing systemd unit to $(DESTDIR)$(systemdsystemunitdir)"
+	$(MKDIR) -p "$(DESTDIR)$(systemdsystemunitdir)"
+	$(INSTALL_DATA) "systemd/istatserver.service" \
+		"$(DESTDIR)$(systemdsystemunitdir)/istatserver.service"
+endif
 
 uninstall-hook:
 	@if test -f "$(DESTDIR)$(DEFAULT_CONFIG_GENERATED_FILE)" ; then \
@@ -95,3 +115,9 @@ uninstall-hook:
 	@if test -f "$(DESTDIR)$(CACHE_FILE)" ; then \
 		rm "$(DESTDIR)$(CACHE_FILE)"; \
 	fi
+if INSTALL_SYSTEMD_UNIT
+	@if test -f "$(DESTDIR)$(systemdsystemunitdir)/istatserver.service"; then \
+	  echo "Removing $(DESTDIR)$(systemdsystemunitdir)/istatserver.service"; \
+	  rm -f "$(DESTDIR)$(systemdsystemunitdir)/istatserver.service"; \
+	fi
+endif

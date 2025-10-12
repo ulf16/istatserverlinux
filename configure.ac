@@ -7,56 +7,137 @@ AM_INIT_AUTOMAKE([foreign subdir-objects])
 AM_MAINTAINER_MODE
 AC_CANONICAL_HOST
 AC_PROG_RANLIB
+AC_USE_SYSTEM_EXTENSIONS
+AC_SYS_LARGEFILE
 
 AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_MACRO_DIR([m4])
 
 # Checks for programs
 AC_PROG_CXX([c++ g++ clang++ CC cxx cc++])
 AC_PROG_CC([cc gcc clang])
+dnl Require pkg-config (pkgconf on Debian/Ubuntu provides pkg-config)
+AC_PATH_PROG([PKG_CONFIG], [pkg-config])
+AS_IF([test -z "$PKG_CONFIG"], [
+  AC_MSG_ERROR([pkg-config not found. Please install it (Debian/Ubuntu: sudo apt-get install -y pkgconf)])
+])
 #AC_PROG_CXX
 #AC_PROG_CC
 AC_PROG_INSTALL
-AC_CHECK_TOOL(AR, ar, false)
+ m4_ifdef([AC_PROG_AR],[AC_PROG_AR],[m4_ifdef([AM_PROG_AR],[AM_PROG_AR],[])])
 
 LIBS="$LIBS -lpthread"
 
-m4_ifndef([AC_LANG_DEFINES_PROVIDED], [m4_define([AC_LANG_DEFINES_PROVIDED])])
+dnl ---- Probe -Wall for C and C++ (don’t clobber user-provided flags) ----
+AC_MSG_CHECKING([whether C compiler accepts -Wall])
+AS_VAR_COPY(_SAVE_CFLAGS, CFLAGS)
+CFLAGS="$CFLAGS -Wall"
+AC_LANG_PUSH([C])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
+  [AC_MSG_RESULT([yes])],
+  [AC_MSG_RESULT([no]); CFLAGS="$_SAVE_CFLAGS"])
+AC_LANG_POP([C])
 
-AC_MSG_CHECKING([if the compiler supports -Wall])
-oldcppflags="$CPPFLAGS"
-CPPFLAGS="$CPPFLAGS -Wall"
-AC_COMPILE_IFELSE([AC_LANG_DEFINES_PROVIDED
-	int main(void) { return 0; }],[
-	AC_MSG_RESULT([yes])
-],[
-	AC_MSG_RESULT([no])
-	CPPFLAGS="$oldcppflags"
-])
+AC_MSG_CHECKING([whether C++ compiler accepts -Wall])
+AS_VAR_COPY(_SAVE_CXXFLAGS, CXXFLAGS)
+CXXFLAGS="$CXXFLAGS -Wall"
+AC_LANG_PUSH([C++])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
+  [AC_MSG_RESULT([yes])],
+  [AC_MSG_RESULT([no]); CXXFLAGS="$_SAVE_CXXFLAGS"])
+AC_LANG_POP([C++])
 
 AC_MSG_CHECKING([if the linker supports -rdynamic])
 oldldflags="$LDFLAGS"
 LDFLAGS="$LDFLAGS -rdynamic"
-AC_LINK_IFELSE([AC_LANG_DEFINES_PROVIDED
-	int main(void) { return 0; }],[
-	AC_MSG_RESULT([yes])
-],[
-	AC_MSG_RESULT([no])
-	LDFLAGS="$oldldflags"
+AC_LANG_PUSH([C])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([],[])],
+  [AC_MSG_RESULT([yes])],
+  [AC_MSG_RESULT([no]); LDFLAGS="$oldldflags"])
+AC_LANG_POP([C])
+
+dnl ============ libxml2 (prefer pkg-config, fallback to xml2-config) ============
+have_libxml2=no
+
+PKG_CHECK_MODULES([LIBXML2], [libxml-2.0], [
+  CPPFLAGS="$CPPFLAGS $LIBXML2_CFLAGS"
+  LIBS="$LIBS $LIBXML2_LIBS"
+  have_libxml2=yes
+], []])
+
+AS_IF([test "x$have_libxml2" != xyes], [
+  AC_PATH_PROG([XML2_CONFIG], [xml2-config], [])
+  AS_IF([test -z "$XML2_CONFIG"], [
+    AC_MSG_ERROR([libxml2 not found (install pkg-config libxml-2.0 or xml2-config)])
+  ])
+  CPPFLAGS="$CPPFLAGS $($XML2_CONFIG --cflags)"
+  LIBS="$LIBS $($XML2_CONFIG --libs)"
+  AC_CHECK_HEADER([libxml/parser.h], [],
+    [AC_MSG_ERROR([xml2-config found, but libxml2 headers are missing])]
+  )
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM([[#include <libxml/parser.h>]], [[xmlInitParser(); xmlCleanupParser();]])],
+    [have_libxml2=yes],
+    [AC_MSG_ERROR([libxml2 libraries present, but link test failed])]
+  )
 ])
 
+AS_IF([test "x$have_libxml2" = xyes], [
+  AC_DEFINE([HAVE_LIBXML2],[1],[Define if libxml2 is available])
+], [
+  AC_MSG_ERROR([libxml2 is required])
+])
+
+AC_ARG_WITH([no-sqlite],
+  AS_HELP_STRING([--with-no-sqlite],[disable sqlite history storage]),
+  [use_sqlite=no],
+  [use_sqlite=auto])
+
+dnl sqlite3 (unless --with-no-sqlite)
+AS_IF([test "x$use_sqlite" != xno], [
+  PKG_CHECK_MODULES([SQLITE3], [sqlite3],
+    [CPPFLAGS="$CPPFLAGS $SQLITE3_CFLAGS"
+     LIBS="$LIBS $SQLITE3_LIBS"
+     AC_DEFINE([USE_SQLITE],1,[Use sqlite for storing history])
+     use_sqlite=yes],
+    [AC_MSG_ERROR([sqlite3 not found; use --with-no-sqlite to disable (not recommended)])]
+  )
+])
+
+dnl --- Optional install of systemd unit (default: off to keep old behavior) ---
+AC_ARG_ENABLE([systemd-unit],
+  AS_HELP_STRING([--enable-systemd-unit],[install the systemd unit (default: no)]),
+  [], [enable_systemd_unit=no])
+
+dnl Where to install the unit if enabled. Allow override, else try pkg-config, else fallback.
+AC_ARG_WITH([systemdsystemunitdir],
+  AS_HELP_STRING([--with-systemdsystemunitdir=DIR],[directory for systemd unit files]),
+  [systemdsystemunitdir="$withval"],
+  [systemdsystemunitdir=])
+
+AS_IF([test -z "$systemdsystemunitdir"], [
+  AS_IF([test -n "$PKG_CONFIG" && $PKG_CONFIG --exists systemd], [
+    systemdsystemunitdir=`$PKG_CONFIG --variable=systemdsystemunitdir systemd 2>/dev/null`
+  ], [
+    systemdsystemunitdir="/lib/systemd/system"
+  ])
+])
+
+AC_SUBST([systemdsystemunitdir])
+AM_CONDITIONAL([INSTALL_SYSTEMD_UNIT],
+  [test "x$enable_systemd_unit" = "xyes" -a -n "$systemdsystemunitdir"])
+
 # Add non-standard directories to the include path
-AC_ARG_WITH(libraries,
-	[
-  --with-libraries=<path> additional place to look for libraries],
-	[LDFLAGS="$LDFLAGS -L $withval"],
-	,
+AC_ARG_WITH([libraries],
+  [AS_HELP_STRING([--with-libraries=PATH], [additional place to look for libraries])],
+  [LDFLAGS="$LDFLAGS -L$withval"],
+  []
 )
-# Add non-standard includes to the include path
-AC_ARG_WITH(includes,
-	[
-  --with-includes=<path> additional place to look for header files],
-	[CPPFLAGS="$CPPFLAGS -I $withval"],
-	,
+
+AC_ARG_WITH([includes],
+  [AS_HELP_STRING([--with-includes=PATH], [additional place to look for header files])],
+  [CPPFLAGS="$CPPFLAGS -I$withval"],
+  []
 )
 # Checks for libraries.
 # AC_CHECK_LIB([dl], [dlopen],,[
@@ -65,8 +146,8 @@ AC_ARG_WITH(includes,
 # 	])
 # ])
 
-CPPFLAGS="$CPPFLAGS -I /usr/local/include"
-LDFLAGS="$LDFLAGS -L /usr/local/lib"
+CPPFLAGS="$CPPFLAGS -I/usr/local/include"
+LDFLAGS="$LDFLAGS -L/usr/local/lib"
 
 have_procfs=none
 
@@ -91,78 +172,62 @@ use_disk_uuid=$have_procfs
 use_disk=none
 use_tls=none
 use_bonjour=none
-use_sqlite=none
 
 AC_CHECK_LIB([nsl],[inet_ntoa])
 AC_CHECK_LIB([socket],[socket])
-  
-AC_CHECK_PROG([XML2_CONFIG],[xml2-config],[xml2-config])
-if test x"$XML2_CONFIG" = x"" ; then
-	AC_MSG_ERROR([cannot find xml2-config: depending on your operating system you may need to install a '-dev' package for libxml2])
-fi
-LIBS="$LIBS `$XML2_CONFIG --libs`"
-CPPFLAGS="$CPPFLAGS `$XML2_CONFIG --cflags`"
-AC_CHECK_HEADER([libxml/parser.h],,[
-	AC_MSG_ERROR([xml2-config was located, but the header files could not be found])
-])
-AC_CHECK_FUNC([xmlFileOpen],[
-	AC_DEFINE_UNQUOTED([HAVE_LIBXML2],[1],[Define to 1 if you have the 'xml2' library (-lxml2).])
-],[
-	AC_MSG_ERROR([xml2-config was located, but a test program linking against -lxml2 could not be built])
-])
 
-AC_CHECK_HEADERS([openssl/x509.h openssl/pem.h openssl/ssl.h openssl/evp.h openssl/err.h],[],[])
-AC_CHECK_LIB([ssl],[SSL_library_init], [
-	AC_CHECK_LIB([ssl],[TLSv1_server_method], [
-		AC_CHECK_LIB([crypto],[X509_new], [
-			AC_DEFINE_UNQUOTED([HAVE_OPENSSL],1,[Define is openssl is available])
-			LIBS="$LIBS -lssl -lcrypto"
-			use_tls=yes
-		], [])
-	], [])
-], [])
+dnl ============ OpenSSL ============
+use_tls=none
+have_openssl=no
 
-AC_CHECK_LIB([ssl],[OPENSSL_init_ssl], [
-	AC_CHECK_LIB([crypto],[X509_new], [
-		AC_DEFINE_UNQUOTED([HAVE_OPENSSL],1,[Define is openssl is available])
-		LIBS="$LIBS -lssl -lcrypto"
-		use_tls=yes
-	], [])
-], [])
+AS_IF([test -n "$PKG_CONFIG"], [
+  PKG_CHECK_MODULES([OPENSSL], [openssl], [
+    CPPFLAGS="$CPPFLAGS $OPENSSL_CFLAGS"
+    LIBS="$LIBS $OPENSSL_LIBS"
+    AC_DEFINE([HAVE_OPENSSL],1,[Define if openssl is available])
+    have_openssl=yes
+    use_tls=yes
+  ], [])])
 
-if test x"$use_tls" = x"none" ; then
-	AC_MSG_ERROR([openssl/crypto not found or does not support tlsv1. you may need to update openssl or install openssl-dev/libssl-dev or a similar package])
-fi
-
-AC_ARG_WITH(no-sqlite,
-  [  --with-no-sqlite   disable sqlite support],
-  use_sqlite=no,
-  [
-	AC_CHECK_HEADER([sqlite3.h],
-	AC_CHECK_LIB([sqlite3],[sqlite3_open], [
-		LIBS="$LIBS -lsqlite3"
-		use_sqlite=yes
-		AC_DEFINE_UNQUOTED([USE_SQLITE],1,[Use sqlite for storing history])
-	], [])
-	, [])
-
-	if test x"$use_sqlite" = x"none" ; then
-	AC_MSG_ERROR([sqlite not found. please install libsqlite3-dev/sqlite-devel or a similar package. Configure with "--with-no-sqlite" to disable sqlite support - not recommended as this will disable all history data support])
-	fi
+dnl Fallback link checks if pkg-config didn’t succeed
+AS_IF([test "x$have_openssl" != xyes], [
+  AC_CHECK_HEADERS([openssl/x509.h openssl/pem.h openssl/ssl.h openssl/evp.h openssl/err.h], [], [])
+  dnl OpenSSL >= 1.1: OPENSSL_init_ssl exists; OpenSSL 1.0.x: SSL_library_init exists
+  AC_CHECK_LIB([ssl],[OPENSSL_init_ssl], [
+    AC_CHECK_LIB([crypto],[X509_new], [
+      AC_DEFINE([HAVE_OPENSSL],1,[Define if openssl is available])
+      LIBS="$LIBS -lssl -lcrypto"
+      have_openssl=yes
+      use_tls=yes
+    ])
+  ], [
+    AC_CHECK_LIB([ssl],[SSL_library_init], [
+      AC_CHECK_LIB([crypto],[X509_new], [
+        AC_DEFINE([HAVE_OPENSSL],1,[Define if openssl is available])
+        LIBS="$LIBS -lssl -lcrypto"
+        have_openssl=yes
+        use_tls=yes
+      ])
+    ])
   ])
+])
+
+AS_IF([test "x$use_tls" = xnone], [
+  AC_MSG_ERROR([OpenSSL not found. Install openssl dev headers or provide pkg-config openssl.])
+])
 
 AC_ARG_WITH(no-avahi,
   [  --with-no-avahi   disable avahi support],
   	use_bonjour=no,
   [
 	AC_CHECK_HEADERS([avahi-common/thread-watch.h], [
-		AC_CHECK_LIB([avahi-client], [avahi_client_new], 
+		AC_CHECK_LIB([avahi-client], [avahi_client_new], [
 			AC_CHECK_LIB([avahi-common],[avahi_threaded_poll_new], [
 				AC_DEFINE_UNQUOTED([HAVE_LIBAVAHI_CLIENT], 1, [Define if avahi is available])
 				LIBS="$LIBS -lavahi-client -lavahi-common"
 				use_bonjour=yes
 			])
-		)
+		])
 	], [])
 ])
 
@@ -246,13 +311,13 @@ AC_CHECK_LIB([devstat], [devstat_getdevs],[
 AC_DEFINE_UNQUOTED([HAVE_DEVSTAT],1,[Define if devstat is available])
 use_activity=devstat
 LIBS="$LIBS -ldevstat"
-],)
+],[])
 
 AC_CHECK_LIB([devstat], [getdevs],[
 AC_DEFINE_UNQUOTED([HAVE_DEVSTAT_ALT],1,[Define if devstat is available])
 use_activity=devstat
 LIBS="$LIBS -ldevstat"
-],)
+],[])
 
 AC_CHECK_LIB([perfstat],[perfstat_cpu_total],[
 AC_DEFINE_UNQUOTED([HAVE_LIBPERFSTAT],1,[Define if libperfstat is available])
@@ -270,37 +335,23 @@ AC_CHECK_FUNC([getloadavg],[
 use_load=getloadavg
 ])
 
-m4_warn([obsolete],
-[Update your code to rely only on HAVE_SYS_TIME_H,
-then remove this warning and the obsolete code below it.
-All current systems provide time.h; it need not be checked for.
-Not all systems provide sys/time.h, but those that do, all allow
-you to include it and time.h simultaneously.])dnl
 AC_CHECK_HEADERS_ONCE([sys/time.h])
-# Obsolete code to be removed.
-if test $ac_cv_header_sys_time_h = yes; then
-  AC_DEFINE([TIME_WITH_SYS_TIME],[1],[Define to 1 if you can safely include both <sys/time.h>
-	     and <time.h>.  This macro is obsolete.])
-fi
-# End of obsolete code.
 
-AC_CHECK_FUNC([clock_gettime],[
-AC_MSG_CHECKING([if CLOCK_UPTIME is available])
-AC_COMPILE_IFELSE([AC_LANG_DEFINES_PROVIDED
-#ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif
-
-static clockid_t testuptime = CLOCK_UPTIME;
-],[have_clock_uptime=yes ; use_uptime=gettime],[have_clock_uptime=no])
-AC_MSG_RESULT([$have_clock_uptime])
+AC_CHECK_FUNC([clock_gettime], [
+  AC_MSG_CHECKING([if CLOCK_UPTIME is available])
+  AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE([[
+      #include <time.h>
+      #ifdef HAVE_SYS_TIME_H
+      # include <sys/time.h>
+      #endif
+      static clockid_t testuptime = CLOCK_UPTIME;
+      int main(void) { return (int)testuptime; }
+    ]])],
+    [have_clock_uptime=yes; use_uptime=gettime],
+    [have_clock_uptime=no]
+  )
+  AC_MSG_RESULT([$have_clock_uptime])
 ])
 
 dnl Use sysctl for cpu and net if procfs isn't available
@@ -348,7 +399,7 @@ AC_CHECK_HEADERS([arpa/inet.h fcntl.h mntent.h netdb.h stdlib.h string.h paths.h
 # hp-ux headers
 AC_CHECK_HEADERS([sys/pstat.h sys/dk.h sys/dlpi.h sys/dlpi_ext.h sys/mib.h sys/stropts.h])
 AC_CHECK_MEMBER(struct pst_diskinfo.psd_dkbytewrite,
-	[AC_DEFINE(HAVE_HPUX_DISK_RW, , [pst_diskinfo.psd_dkbytewrite])],
+	[AC_DEFINE([HAVE_HPUX_DISK_RW],[1],[pst_diskinfo.psd_dkbytewrite])],
 	[],
 	[#include <sys/pstat.h>])
 
@@ -404,6 +455,14 @@ AC_CHECK_MEMBER([struct statvfs.f_frsize],[AC_DEFINE_UNQUOTED([HAVE_STATVFS_FRSI
 #include <sys/types.h>
 #include <sys/statvfs.h>
 ])
+
+AC_MSG_CHECKING([for GCC/Clang to enable hardening flags])
+AS_IF([$CXX --version >/dev/null 2>&1], [
+  CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fno-plt -fPIC"
+  CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fno-plt -fPIC"
+  LDFLAGS="$LDFLAGS -Wl,-z,relro -Wl,-z,now"
+])
+AC_MSG_RESULT([enabled])
 
 AC_MSG_CHECKING([for default location of config directory])
 test x"$prefix" = x"NONE" && prefix="$ac_default_prefix"
@@ -511,7 +570,7 @@ case $use_uptime in
 	sysctl)
 		AC_DEFINE_UNQUOTED([USE_UPTIME_SYSCTL],1,[Use sysctl(2) to probe uptime])
 		;;
-	sysctl)
+	none)
 		AC_DEFINE_UNQUOTED([USE_UPTIME_NONE],1,[No uptime])
 		;;
 esac
