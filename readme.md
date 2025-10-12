@@ -6,14 +6,28 @@ iStat Server is a system monitoring daemon that is used in conjunction with [iSt
 
 This fork brings iStatServerLinux up to date for modern Linux systems (and beyond).  
 All changes are backward-compatible with the original iStat client app.
-### ✅ Tested Platforms
-| Platform | OS / Distro | Status |
-|-----------|--------------|---------|
-| Odroid N2 | Armbian 24.x | ✅ CPU/GPU/SoC sensors working |
-| Odroid XU4 | Armbian 24.x | ✅ Thermal + frequency sensors verified |
-| Intel Mac Mini | Ubuntu 24.04 | ✅ RAPL + CPU frequency working |
-| Generic x86 | Debian/Ubuntu | ✅ Build + cert generation verified |
------
+
+### Overview of Improvements
+
+This updated version of **iStat Server for Linux** modernizes and extends the original [Bjango repository](https://github.com/bjango/istatserverlinux):
+
+- ✅ **Modernized build system** — fully updated Autotools setup compatible with current GCC, Clang, and pkg-config environments.  
+- 🔐 **Improved security** — stronger OpenSSL 3.x support, hardened build flags, and safer configuration file permissions.  
+- 🧠 **Enhanced sensor detection** — improved CPU/GPU and frequency handling across multiple architectures.  
+- 🧰 **Optional systemd integration** — `--enable-systemd-unit` adds automatic service installation.  
+- 🪶 **Cleaner, more reliable configuration and install process** — better dependency detection and streamlined setup scripts.
+
+### 🧱 Supported Architectures
+
+| Hardware | Architecture | Example Device | Build Status |
+|-----------|---------------|----------------|---------------|
+| Intel / AMD 64-bit | `x86_64` | Mac mini (Intel), PC servers | ✅ Compiles and runs cleanly |
+| ARM 64-bit | `aarch64` | Odroid N2, Raspberry Pi 4 (64-bit OS) | ✅ Stable |
+| ARM 32-bit | `armv7l` | Odroid XU4, older Raspberry Pi models | ✅ Stable |
+| macOS | x86_64 / arm64 | Apple Silicon or Intel | ⚙️ Build planned, not yet supported |
+
+iStat Server builds and runs natively on both **64-bit and 32-bit ARM Linux** systems as well as traditional x64 servers.  
+Cross-compiling is also possible using standard GNU autotools.
 
 ### Quick Install
 ```
@@ -35,104 +49,6 @@ If you do not want packages installed or updated automatically then please perfo
 
 -----
 
-## 2025-10-11 Updates
-### Modernized OpenSSL certificate generation (EVP_PKEY API, OpenSSL 3.0+ compatible)
-- Migrated OpenSSL certificate generation to the **EVP_PKEY** API (no deprecated RSA calls).
-- Certificates now use **SHA-256** signatures and modern cipher defaults.
-- Fully compatible with **OpenSSL 3.0+** (Ubuntu 22.04 / 24.04, Armbian, Debian 12, macOS).
-- Removed legacy `RSA_generate_key()` and `EC_KEY_free()` usage — clean builds, no warnings.
-### Unified sensor detection for Odroid N2, XU4, and Intel Mac Mini
-- Unified sensor handling across all systems:
-  - **Odroid N2**, **Odroid XU4**, and **Intel Mac Mini** verified.
-  - CPU, GPU, SoC, and thermal zones now discovered automatically via **sysfs**.
-### Build & Toolchain
-- Updated `configure.ac` (Autoconf 2.69+, Automake 1.16)
-- Refreshed helper scripts (`compile`, `config.guess`, etc.)
-- Works with GCC 11–14 (tested on Ubuntu 24.04 and Armbian 24.x)
-
-## 2025-10-08 Updates
-### CPU Power and Frequency Monitoring (non-root setup)
-
-- Added modern Linux hardware telemetry support for Intel systems — including live CPU package power and frequency — **without requiring root privileges**.
-
-### New sensors
-
-- **RAPL Power Domains** — reports real-time power (in watts) per CPU domain:
-  - `/sys/class/powercap/intel-rapl:*/*/energy_uj`
-  - Typically includes `package-0`, `core`, and `uncore`
-- **CPU Frequency** — reads per-policy current CPU frequency from:
-  - `/sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq`
-
-All sensors are visible remotely in iStat for macOS/iOS through the `istatserver` daemon.
-
----
-
-### Non-root access to RAPL energy readings
-
-- By default, RAPL energy files (`energy_uj`) are readable only by **root**.  
-- To allow the unprivileged `istat` service user to read them safely, add this **udev rule**:
-
-`cat <<'RULE' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
-SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", RUN+="/bin/chmod 0444 %S%p/energy_uj"
-RULE`
-
-`sudo udevadm control --reload-rules`
-
-`sudo udevadm trigger --subsystem-match=powercap`
-
-- You can verify that the permissions were applied correctly:
-
-`ls -l /sys/class/powercap/intel-rapl:*/energy_uj`
-- expected: -r--r--r--
-
-`sudo -u istat cat /sys/class/powercap/intel-rapl:0/energy_uj`
-- should print a numeric value (microjoules)
-
-This change survives reboots and does not weaken system security — only allows read access to instantaneous CPU energy counters.
-
-⸻
-
-## Systemd unit (modernized)
-
-### This updated service file runs iStat Server as the istat user, with minimal privileges and no PID management needed:
-
-[Unit]
-Description=iStat Server for remote monitoring with iStat for iOS/macOS
-Documentation=man:istatserver(1)
-After=network-online.target systemd-udevd.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=istat
-Group=istat
-ExecStart=/usr/local/bin/istatserver
-WorkingDirectory=/usr/local/etc/istatserver
-Restart=on-failure
-RestartSec=2
-AmbientCapabilities=
-NoNewPrivileges=true
-ProtectSystem=full
-ReadWritePaths=/usr/local/etc/istatserver
-
-[Install]
-WantedBy=multi-user.target
-
-### Install and enable:
-
-`sudo systemctl daemon-reload`
-
-`sudo systemctl enable --now istatserver`
-
-
-⸻
-
-## Notes
-- The applesmc kernel message `applesmc: hwmon_device_register() is deprecated` is harmless and does not affect temperature readings.
-- Tested on Intel Mac mini (Debian 12, kernel 6.1) using the istat service user.
-- No setcap or root privileges required.
-
-----
 
 ### Supported OSs
 - Linux (updated)
