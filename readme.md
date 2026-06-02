@@ -1,217 +1,230 @@
 # iStat Server
 
-iStat Server is a system monitoring daemon that is used in conjunction with [iStat View for iOS](https://bjango.com/ios/istat/) and [iStat View for macOS](https://bjango.com/mac/istat/) to remotely monitor computers.
+iStat Server is a remote system monitoring daemon for iStat View-compatible
+clients. This maintained fork keeps the original protocol usable on modern
+Linux systems and adds preliminary macOS Apple Silicon support.
 
-## 2025 Maintenance & Modernization Update
+The original project was released by [Bjango](https://github.com/bjango/istatserverlinux)
+and is based on [istatd](https://github.com/tiwilliam/istatd) by William
+Tisater. This fork is maintained at:
 
-This fork brings iStatServerLinux up to date for modern Linux systems (and beyond).  
-All changes are backward-compatible with the original iStat client app.
+https://github.com/ulf16/istatserverlinux
 
-### Overview of Improvements
+## 2026 Maintenance Update
 
-This updated version of **iStat Server for Linux** modernizes and extends the original [Bjango repository](https://github.com/bjango/istatserverlinux):
+Release `v1.2.0` brings the fork in line with the telemetry expected by
+iStat View-compatible clients on modern Linux systems and Apple Silicon Macs.
 
-- ✅ **Modernized build system** — fully updated Autotools setup compatible with current GCC, Clang, and pkg-config environments.  
-- 🔐 **Improved security** — stronger OpenSSL 3.x support, hardened build flags, and safer configuration file permissions.  
-- 🧠 **Enhanced sensor detection** — improved CPU/GPU and frequency handling across multiple architectures.  
-- 🧰 **Optional systemd integration** — `--enable-systemd-unit` adds automatic service installation.  
-- 🪶 **Cleaner, more reliable configuration and install process** — better dependency detection and streamlined setup scripts.
+### Highlights
 
-### 🧱 Supported Architectures
+- Modern Autotools build for current GCC, Clang, pkg-config, OpenSSL, SQLite,
+  and libxml2 environments.
+- Hardened Linux install path with safer config permissions and optional
+  systemd service installation.
+- Bonjour/Avahi discovery where available.
+- Linux CPU, memory, load, uptime, disk, disk I/O, network, process, sensor,
+  power, frequency, and GPU telemetry.
+- Preliminary macOS Apple Silicon support, tested on Mac mini M1.
+- macOS memory pressure, APFS-aware disk space, disk I/O mapping, task lists,
+  Apple Silicon sensor names, fan speed, power, frequency, and AGX GPU counters.
+- Protocol extensions for server model, OS version, memory pressure, GPU data,
+  disk metadata, task lists, and sensor units.
+- Install and upgrade paths preserve existing configuration and SQLite history
+  databases.
 
-| Hardware | Architecture | Example Device | Build Status |
-|-----------|---------------|----------------|---------------|
-| Intel / AMD 64-bit | `x86_64` | Mac mini (Intel), PC servers | ✅ Compiles and runs cleanly |
-| ARM 64-bit | `aarch64` | Odroid N2, Raspberry Pi 4 (64-bit OS) | ✅ Stable |
-| ARM 32-bit | `armv7l` | Odroid XU4, older Raspberry Pi models | ✅ Stable |
-| macOS | x86_64 / arm64 | Apple Silicon or Intel | ⚙️ Build planned, not yet supported |
+## Supported Architectures
 
-iStat Server builds and runs natively on both **64-bit and 32-bit ARM Linux** systems as well as traditional x64 servers.  
-Cross-compiling is also possible using standard GNU autotools.
+| Platform | Architecture | Example Device | Status |
+| --- | --- | --- | --- |
+| Linux | x86_64 | Intel/AMD servers, Intel Mac mini | Stable |
+| Linux | aarch64 | Odroid N2, Raspberry Pi 4 64-bit | Stable |
+| Linux | armv7l | Odroid XU4, older Raspberry Pi systems | Stable |
+| macOS | arm64 | Apple Silicon Mac mini | Preliminary |
+| BSD/AIX/Solaris/HP-UX | varies | legacy supported targets | Not recently tested |
 
-### Quick Install
+## Current Telemetry
+
+Linux:
+
+- CPU usage, task list, load, uptime, memory, swap, and process memory
+- Disk capacity and disk I/O
+- Network interface throughput
+- lm_sensors temperature and fan sensors
+- CPU frequency through cpufreq
+- Intel RAPL CPU package/core/uncore power
+- GPU telemetry where exposed through sysfs, DRM, devfreq, or i915 debugfs
+
+macOS Apple Silicon:
+
+- CPU usage, task list, load, uptime, memory, swap, and memory pressure
+- Disk capacity using APFS-aware volume accounting
+- Disk I/O mapped back to displayed APFS volumes, including multi-disk volumes
+- Network interface throughput
+- Apple HID temperature sensors with readable Apple Silicon names
+- Fan speed through SMC-compatible interfaces
+- CPU/GPU/ANE/RAM/PCIe power where available through IOReport/powermetrics
+- CPU and GPU frequency through the powermetrics helper
+- AGX GPU load, renderer/tiler utilization, and unified GPU memory counters
+
+## Quick Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ulf16/istatserverlinux/master/get-istatserver.sh -o istatserverlinux.sh
+sh istatserverlinux.sh
 ```
-curl -fsSL https://raw.githubusercontent.com/ulf16/istatserverlinux/master/get-istatserver.sh -o istatserverlinux.sh && sh istatserverlinux.sh
-```
 
-Quick install will install and update any required packages. 
-The installer is designed for **Linux** distributions using **systemd**.
-It automatically builds, installs, and enables the istatserver service.
+The quick installer is designed for Linux distributions using systemd. It
+installs required packages, builds the daemon, installs it, and enables the
+`istatserver` service.
 
-On **non-systemd** systems (e.g., Alpine with OpenRC, Devuan, or BSDs),
-the build will still succeed, but service installation will be skipped.
-You can then run the daemon manually:
-```
+On non-systemd systems, the build can still succeed, but service installation is
+skipped. Run the daemon manually or add a local init script:
+
+```sh
 sudo -u istat /usr/local/bin/istatserver
 ```
-or create a small init script if you prefer to start it automatically.
-If you do not want packages installed or updated automatically then please perform a manual install using the instructions below
 
------
+## Requirements
 
+- C and C++ compilers such as gcc, g++, or clang
+- Autoconf, automake, libtool, and pkg-config/pkgconf
+- OpenSSL/libssl plus development headers
+- SQLite3 plus development headers
+- libxml2 plus development headers
 
-### Supported OSs
-- Linux (updated)
-  
-- FreeBSD, DragonFly BSD, OpenBSD, NetBSD and other BSD based OSs
-- AIX
-- Solaris
-- HP-UX (Still in development and not tested)
+Optional libraries:
 
------
+- libavahi plus development headers for Bonjour discovery on Linux
+- lm_sensors/libsensors4 plus development headers for Linux sensors
 
-### Requirements
-- C and C++ compilers such as gcc and g++.
-- Auto tools (autoconf and automake).
-- OpenSSL/libssl + development libraries.
-- sqlite3 + development libraries.
-- libxml2 + development libraries.
+On macOS, Homebrew packages are sufficient for the build dependencies. The
+Apple Silicon helper installed by this fork is used for powermetrics-derived
+frequency and power values.
 
-We have a [package guide available](https://github.com/bjango/istatserverlinux/wiki/Package-Guide) to help you install all the required packages for your OS.
+## Build And Install
 
------
-
-### Building and starting iStat Server
-- Pull the latest branch (`master`).
-- cd /path/to/istatserver
-- ./autogen
-- ./configure
-- make
-- sudo make install
-- Test with: sudo /usr/local/bin/istatserver
-- Install systemd unit file: sudo cp ./resource/systemd/istatserver.service /etc/systemd/system/istatserver.service
-- sudo systemctl restart istatserver
-
-
-A 5 digit passcode is generated by the install script. It can be found in the preference file, which is generally located at **/usr/local/etc/istatserver/istatserver.conf**. iStat View will ask for this passcode the first time you connect to your computer.
-
------
-
-### Upgrading iStat Server
-Upgrades follow the same process as standard installs. Please stop istatserver if it is running then run the normal build process.
-
------
-
-### Security Notes
-
-- **Least privilege:**
-    
-    The service runs as a dedicated user istat (not root).
-    
-    Configuration and database files live in /usr/local/etc/istatserver/
-    
-    and are owned by istat:istat.
-    
-- **Foreground service:**
-    
-    The included systemd unit uses Type=simple (no -d), meaning the process stays
-    
-    in the foreground under systemd’s direct supervision.
-    
-    This ensures clean restarts, proper logging (journalctl), and avoids PID-file issues.
-    
-- **No elevated privileges required:**
-    
-    Power (RAPL) readings are made accessible to the istat user through a udev rule
-    
-    that adjusts permissions on the relevant sysfs files.
-    
-    By default, the installer applies a world-readable rule:
-    
-
-```
-SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", RUN+="/bin/chmod 0444 %S%p/energy_uj"
+```sh
+git clone https://github.com/ulf16/istatserverlinux.git
+cd istatserverlinux
+./autogen
+./configure
+make
+sudo make install
+sudo /usr/local/bin/istatserver -d
 ```
 
-- For tighter control, you can restrict access to the istat group instead:
-    
+A 5 digit passcode is generated by the install script. It can be found in:
 
-```
-SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", GROUP="istat", MODE="0440"
-```
-
-- Then reload and apply the rule:
-    
-
-```
-sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=powercap
+```text
+/usr/local/etc/istatserver/istatserver.conf
 ```
 
--   
-    
-- **Process hardening:**
-    
-    The systemd unit enforces several security directives:
-    
-    NoNewPrivileges, PrivateTmp, and multiple Protect*= options to reduce
-    
-    the attack surface. You can tighten them further (for example
-    
-    ProtectSystem=strict, ReadWritePaths=/usr/local/etc/istatserver)
-    
-    depending on your setup.
-    
-- **Certificates and keys:**
-    
-    Self-signed certificates use RSA-2048 with SHA-256 and are generated through
-    
-    OpenSSL’s modern EVP API. They are stored in:
-    
+iStat View-compatible clients ask for this passcode the first time they connect.
 
+## Upgrading
+
+Stop the running service, rebuild, and install normally:
+
+```sh
+sudo service istatserver stop
+git pull
+./autogen
+./configure
+make
+sudo make install
+sudo service istatserver start
 ```
+
+The installer preserves the existing configuration and SQLite history database.
+Do not remove `/usr/local/etc/istatserver/istatserver.db` if you want to keep
+historical graph data.
+
+## macOS Apple Silicon Helper
+
+Apple's `powermetrics` tool requires elevated privileges. This fork ships a
+small LaunchDaemon helper that samples powermetrics and writes a plain key/value
+file read by the unprivileged server process.
+
+After installing the server under `/opt/istatserverlinux`, install the helper:
+
+```sh
+sudo /opt/istatserverlinux/contrib/install-macos-helper.sh
+```
+
+To remove it:
+
+```sh
+sudo /opt/istatserverlinux/contrib/uninstall-macos-helper.sh
+```
+
+## Starting With systemd
+
+The build can install the systemd unit directly:
+
+```sh
+./configure --enable-systemd-unit
+make
+sudo make install
+sudo systemctl enable --now istatserver
+```
+
+You can also install the unit manually:
+
+```sh
+sudo cp ./resource/systemd/istatserver.service /etc/systemd/system/istatserver.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now istatserver
+```
+
+## Starting With upstart
+
+```sh
+sudo cp ./resource/upstart/istatserver.conf /etc/init/istatserver.conf
+sudo start istatserver
+```
+
+## Starting With rc.d
+
+```sh
+sudo cp ./resource/rc.d/istatserver /etc/rc.d/istatserver
+sudo /etc/rc.d/istatserver start
+```
+
+## Security Notes
+
+- The service runs as a dedicated `istat` user where supported.
+- Configuration and database files live in `/usr/local/etc/istatserver/`.
+- The systemd unit runs the process in the foreground under systemd supervision.
+- Linux RAPL power readings can be exposed to the `istat` user with a narrow
+  udev rule instead of running the daemon as root.
+- Self-signed certificates use RSA-2048 with SHA-256 through OpenSSL's modern
+  EVP API and are stored in:
+
+```text
 /usr/local/etc/istatserver/key.pem
 /usr/local/etc/istatserver/cert.pem
 ```
 
-- Make sure these files are **not world-writable** and owned by the istat user.
-    
-    You can safely replace them with your own certs using the same file paths.
-    
-- **Network exposure:**
-    
-    istatserver listens on all interfaces by default.
-    
-    To restrict access, configure network_addr and network_port
-    
-    in /usr/local/etc/istatserver/istatserver.conf,
-    
-    or use a local firewall rule to limit visibility.
-    
-- **Database and logging:**
-    
-    Historical data is stored in SQLite under /usr/local/etc/istatserver/.
-    
-    On devices with flash storage (like SBCs), consider placing this directory
-    
-    on a more durable drive, tmpfs, or using periodic syncs to reduce write wear.
-    
+To expose Intel RAPL readings without root, install a udev rule such as:
 
----
-
-
-### Starting iStat Server at boot
-iStat Server does not install any scripts to start itself at boot. Sample scripts for rc.d, upstart and systemd are included in the resources directory. You may need to customize them depending on your OS.
-
-### Starting with systemd
-- sudo cp ./resource/systemd/istatserver.service  /etc/systemd/system/istatserver.service
-- sudo service istatserver start
-
-### Starting with upstart (outdated)
-- sudo cp ./resource/upstart/istatserver.conf  /etc/init/istatserver.conf
-- sudo start istatserver
-
-### Starting with rc.d (outdated)
-- sudo cp ./resource/rc.d/istatserver  /etc/rc.d/istatserver
-- sudo /etc/rc.d/istatserver start
-
------
-
-iStat Server is based on [istatd](https://github.com/tiwilliam/istatd) by William Tisäter.
-
------
-
+```text
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", TEST=="%S%p/energy_uj", GROUP="istat", MODE="0440"
 ```
+
+Then reload and apply it:
+
+```sh
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=powercap
+```
+
+## Notes
+
+The native replacement macOS viewer prototype is kept in a separate private
+repository. This repository contains the server and server-side helper assets
+only.
+
+```text
         :::::::::   :::::::     ::::      ::::    :::   ::::::::    ::::::::
        :+:    :+:      :+:    :+: :+:    :+:+:   :+:  :+:    :+:  :+:    :+:
       +:+    +:+      +:+   +:+   +:+   :+:+:+  +:+  +:+         +:+    +:+
