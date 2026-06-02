@@ -39,6 +39,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#if defined(__APPLE__)
+# include <sys/sysctl.h>
+#endif
 #include <grp.h>
 #include <pwd.h>
 
@@ -73,6 +76,10 @@ int serverPlatform()
 {
 	int platform = 2;
 
+#if defined(__APPLE__)
+	platform = 7;
+#endif
+
 #if defined(__sun) && defined(__SVR4)
 	platform = 3;
 #endif
@@ -98,6 +105,34 @@ int serverPlatform()
 #endif
 
 	return platform;
+}
+
+static string sysctlString(const char *name)
+{
+#if defined(__APPLE__)
+	size_t len = 0;
+	if (sysctlbyname(name, NULL, &len, NULL, 0) < 0 || len == 0)
+		return "";
+
+	vector<char> value(len + 1, 0);
+	if (sysctlbyname(name, &value[0], &len, NULL, 0) < 0)
+		return "";
+
+	return string(&value[0]);
+#else
+	(void)name;
+	return "";
+#endif
+}
+
+string serverModel()
+{
+	return sysctlString("hw.model");
+}
+
+string serverOSVersion()
+{
+	return sysctlString("kern.osproductversion");
 }
 
 double get_current_time()

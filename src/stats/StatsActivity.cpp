@@ -31,7 +31,278 @@
 
 #include "StatsActivity.h"
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/storage/IOBlockStorageDriver.h>
+#include <map>
+#endif
+
 using namespace std;
+
+#ifdef __APPLE__
+struct darwin_activity_counter
+{
+	string displayName;
+	unsigned long long read;
+	unsigned long long write;
+	unsigned long long reads;
+	unsigned long long writes;
+
+	darwin_activity_counter()
+	{
+		read = 0;
+		write = 0;
+		reads = 0;
+		writes = 0;
+	}
+};
+
+struct darwin_activity_target
+{
+	string key;
+	string displayName;
+};
+
+static unsigned long long cfNumberValue(CFDictionaryRef dictionary, const char *key)
+{
+	CFStringRef cfKey = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+	if(cfKey == NULL)
+		return 0;
+
+	CFNumberRef number = (CFNumberRef)CFDictionaryGetValue(dictionary, cfKey);
+	unsigned long long value = 0;
+	if(number != NULL)
+		CFNumberGetValue(number, kCFNumberSInt64Type, &value);
+
+	CFRelease(cfKey);
+	return value;
+}
+
+static bool bsdNameForFirstMediaChild(io_registry_entry_t entry, string *name)
+{
+	CFTypeRef bsdName = IORegistryEntryCreateCFProperty(entry, CFSTR("BSD Name"), kCFAllocatorDefault, 0);
+	if(bsdName != NULL)
+	{
+		char buffer[256];
+		bool ok = CFStringGetCString((CFStringRef)bsdName, buffer, sizeof(buffer), kCFStringEncodingUTF8);
+		CFRelease(bsdName);
+		if(ok && buffer[0] != '\0')
+		{
+			*name = buffer;
+			return true;
+		}
+	}
+
+	io_iterator_t children = 0;
+	if(IORegistryEntryGetChildIterator(entry, kIOServicePlane, &children) != KERN_SUCCESS)
+		return false;
+
+	io_object_t child;
+	while((child = IOIteratorNext(children)) != 0)
+	{
+		bool found = bsdNameForFirstMediaChild(child, name);
+		IOObjectRelease(child);
+		if(found)
+		{
+			IOObjectRelease(children);
+			return true;
+		}
+	}
+
+	IOObjectRelease(children);
+	return false;
+}
+
+static string shellEscapePath(const string &path)
+{
+	string escaped;
+	for (string::const_iterator cur = path.begin(); cur != path.end(); ++cur)
+	{
+		if (*cur == '\'')
+			escaped += "'\\''";
+		else
+			escaped += *cur;
+	}
+	return "'" + escaped + "'";
+}
+
+static string readCommand(const string &command)
+{
+	FILE *fp = popen(command.c_str(), "r");
+	if(fp == NULL)
+		return "";
+
+	string output;
+	char buffer[4096];
+	while(fgets(buffer, sizeof(buffer), fp) != NULL)
+		output += buffer;
+
+	pclose(fp);
+	return output;
+}
+
+static string plistStringForKey(const string &plist, const string &key, size_t start = 0)
+{
+	string keyTag = "<key>" + key + "</key>";
+	size_t keyPos = plist.find(keyTag, start);
+	if(keyPos == string::npos)
+		return "";
+
+	size_t stringStart = plist.find("<string>", keyPos + keyTag.length());
+	if(stringStart == string::npos)
+		return "";
+	stringStart += 8;
+
+	size_t stringEnd = plist.find("</string>", stringStart);
+	if(stringEnd == string::npos)
+		return "";
+
+	return plist.substr(stringStart, stringEnd - stringStart);
+}
+
+static bool plistHasTrueForKey(const string &plist, const string &key)
+{
+	string keyTag = "<key>" + key + "</key>";
+	size_t keyPos = plist.find(keyTag);
+	if(keyPos == string::npos)
+		return false;
+
+	size_t truePos = plist.find("<true/>", keyPos + keyTag.length());
+	size_t nextKey = plist.find("<key>", keyPos + keyTag.length());
+	return truePos != string::npos && (nextKey == string::npos || truePos < nextKey);
+}
+
+static string wholeDiskName(string device)
+{
+	if(device.rfind("/dev/", 0) == 0)
+		device = device.substr(5);
+
+	size_t s = device.find('s', 4);
+	if(s != string::npos && s > 0 && device[s - 1] >= '0' && device[s - 1] <= '9')
+		device = device.substr(0, s);
+
+	return device;
+}
+
+static string joinNames(const vector<string> &names)
+{
+	string joined;
+	for(vector<string>::const_iterator cur = names.begin(); cur != names.end(); ++cur)
+	{
+		if(joined.size() > 0)
+			joined += "+";
+		joined += *cur;
+	}
+	return joined;
+}
+
+static string deviceKey(const string &device)
+{
+	if(device.rfind("/dev/", 0) == 0)
+		return device;
+
+	return "/dev/" + device;
+}
+
+static void addAppleRaidMembers(const string &raidDevice, darwin_activity_target target, map<string, darwin_activity_target> *labels)
+{
+	string plist = readCommand("/usr/sbin/diskutil appleRAID list -plist 2>/dev/null");
+	size_t pos = 0;
+	while((pos = plist.find("<key>BSD Name</key>", pos)) != string::npos)
+	{
+		string bsdName = plistStringForKey(plist, "BSD Name", pos);
+		if(bsdName != raidDevice)
+		{
+			pos += 18;
+			continue;
+		}
+
+		size_t membersKey = plist.find("<key>Members</key>", pos);
+		size_t membersEnd = plist.find("</array>", membersKey);
+		if(membersKey == string::npos || membersEnd == string::npos)
+			return;
+
+		size_t memberPos = membersKey;
+		vector<string> members;
+		while((memberPos = plist.find("<key>BSD Name</key>", memberPos)) != string::npos && memberPos < membersEnd)
+		{
+			string member = plistStringForKey(plist, "BSD Name", memberPos);
+			if(member.size() > 0)
+				members.push_back(wholeDiskName(member));
+			memberPos += 18;
+		}
+
+		if(members.size() > 0)
+			target.displayName = joinNames(members);
+		for(vector<string>::iterator member = members.begin(); member != members.end(); ++member)
+			(*labels)[*member] = target;
+		return;
+	}
+}
+
+static map<string, darwin_activity_target> darwinActivityLabels()
+{
+	static map<string, darwin_activity_target> cachedLabels;
+	static time_t lastRefresh = 0;
+	time_t now = time(NULL);
+	if(lastRefresh != 0 && now - lastRefresh < 30)
+		return cachedLabels;
+
+	map<string, darwin_activity_target> labels;
+
+	string rootInfo = readCommand("/usr/sbin/diskutil info -plist / 2>/dev/null");
+	string dataInfo = readCommand("/usr/sbin/diskutil info -plist /System/Volumes/Data 2>/dev/null");
+	string physicalStore = plistStringForKey(dataInfo, "APFSPhysicalStore");
+	string rootDevice = plistStringForKey(rootInfo, "DeviceIdentifier");
+	if(physicalStore.size() > 0)
+	{
+		darwin_activity_target target;
+		target.key = deviceKey(rootDevice.size() > 0 ? rootDevice : physicalStore);
+		target.displayName = wholeDiskName(physicalStore);
+		labels[wholeDiskName(physicalStore)] = target;
+		if(rootDevice.size() > 0)
+			labels[wholeDiskName(rootDevice)] = target;
+	}
+
+	DIR *volumes = opendir("/Volumes");
+	if(volumes != NULL)
+	{
+		struct dirent *entry;
+		while((entry = readdir(volumes)) != NULL)
+		{
+			if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+				continue;
+
+			string label = entry->d_name;
+			string path = "/Volumes/" + label;
+			char linkTarget[PATH_MAX];
+			ssize_t len = readlink(path.c_str(), linkTarget, sizeof(linkTarget) - 1);
+			if(len > 0)
+				continue;
+
+			string info = readCommand("/usr/sbin/diskutil info -plist " + shellEscapePath(path) + " 2>/dev/null");
+			string device = plistStringForKey(info, "DeviceIdentifier");
+			if(device.size() == 0)
+				continue;
+
+			darwin_activity_target target;
+			target.key = deviceKey(device);
+			target.displayName = wholeDiskName(device);
+
+			labels[wholeDiskName(device)] = target;
+
+			if(plistHasTrueForKey(info, "RAIDMaster"))
+				addAppleRaidMembers(device, target, &labels);
+		}
+		closedir(volumes);
+	}
+
+	cachedLabels = labels;
+	lastRefresh = now;
+	return labels;
+}
+#endif
 
 #if defined(USE_ACTIVITY_HPUX)
 
@@ -343,6 +614,62 @@ void StatsActivity::update(long long sampleID)
 	free(storage);
 }
 
+#elif defined(USE_ACTIVITY_DARWIN)
+
+void StatsActivity::init()
+{
+	_init();
+}
+
+void StatsActivity::update(long long sampleID)
+{
+	map<string, darwin_activity_target> labels = darwinActivityLabels();
+	map<string, darwin_activity_counter> totals;
+
+	io_iterator_t iterator = 0;
+	kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(kIOBlockStorageDriverClass), &iterator);
+	if(kr != KERN_SUCCESS)
+		return;
+
+	io_object_t driver;
+	while((driver = IOIteratorNext(iterator)) != 0)
+	{
+		CFMutableDictionaryRef properties = NULL;
+		if(IORegistryEntryCreateCFProperties(driver, &properties, kCFAllocatorDefault, 0) != KERN_SUCCESS || properties == NULL)
+		{
+			IOObjectRelease(driver);
+			continue;
+		}
+
+		CFDictionaryRef statistics = (CFDictionaryRef)CFDictionaryGetValue(properties, CFSTR(kIOBlockStorageDriverStatisticsKey));
+		if(statistics != NULL)
+		{
+			string name;
+			if(!bsdNameForFirstMediaChild(driver, &name))
+				name = "disk";
+
+			map<string, darwin_activity_target>::iterator label = labels.find(wholeDiskName(name));
+			string key = label != labels.end() ? label->second.key : name;
+			if(label != labels.end())
+				totals[key].displayName = label->second.displayName;
+			totals[key].read += cfNumberValue(statistics, kIOBlockStorageDriverStatisticsBytesReadKey);
+			totals[key].write += cfNumberValue(statistics, kIOBlockStorageDriverStatisticsBytesWrittenKey);
+			totals[key].reads += cfNumberValue(statistics, kIOBlockStorageDriverStatisticsReadsKey);
+			totals[key].writes += cfNumberValue(statistics, kIOBlockStorageDriverStatisticsWritesKey);
+		}
+
+		CFRelease(properties);
+		IOObjectRelease(driver);
+	}
+
+	IOObjectRelease(iterator);
+
+	for(map<string, darwin_activity_counter>::iterator cur = totals.begin(); cur != totals.end(); ++cur)
+	{
+		processDisk(cur->first, sampleID, cur->second.read, cur->second.write, cur->second.reads, cur->second.writes, cur->second.displayName);
+	}
+}
+
 #else
 
 void StatsActivity::init()
@@ -379,6 +706,7 @@ void StatsActivity::createDisk(string key)
 	item.is_new = true;
 
 	item.device = key;
+	item.displayName = key;
 
 #ifdef USE_SQLITE
 	if(historyEnabled == true)
@@ -432,7 +760,7 @@ void StatsActivity::prepareUpdate()
 	}
 }
 
-void StatsActivity::processDisk(string key, long long sampleID, unsigned long long read, unsigned long long write, unsigned long long reads, unsigned long long writes)
+void StatsActivity::processDisk(string key, long long sampleID, unsigned long long read, unsigned long long write, unsigned long long reads, unsigned long long writes, string displayName)
 {
 	if(key == "pass" || key == "cd")
 		return;
@@ -444,6 +772,8 @@ void StatsActivity::processDisk(string key, long long sampleID, unsigned long lo
 		if (key == (*cur).device)
 		{
 			(*cur).active = true;
+			if(displayName.size() > 0)
+				(*cur).displayName = displayName;
 
 			if(ready == 0)
 				continue;

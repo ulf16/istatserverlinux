@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([istatserver],[3.02],[http://github.com/bjango/istatserverlinux/issues])
+AC_INIT([istatserver],[3.04],[https://github.com/ulf16/istatserverlinux/issues])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 AM_MAINTAINER_MODE
 AC_CANONICAL_HOST
@@ -294,6 +294,15 @@ case "${host_os}" in
 		use_processes=kvm
 		AC_DEFINE_UNQUOTED([PROCESSES_KVM_DRAGONFLY],1,[Define for dragonfly])
 		;;
+	*darwin*)
+		use_mem=darwin
+		use_net=getifaddrs
+		use_processes=darwin
+		use_activity=darwin
+		use_uptime=sysctl
+		LIBS="$LIBS -framework IOKit -framework CoreFoundation"
+		LDFLAGS="$LDFLAGS -Wl,-undefined,dynamic_lookup"
+		;;
 	*solaris*)
 		AC_DEFINE_UNQUOTED([IPS_IOCTL],1,[Define to use ioctl for ip addresses on solaris])
 		;;
@@ -373,6 +382,14 @@ if test x"$use_battery" = x"none" ; then
 	esac
 fi
 ],)
+
+dnl Darwin has sysctl/sysctlbyname, but not the BSD kern.cp_time counters used
+dnl by the generic sysctl CPU collectors.
+case "${host_os}" in
+	*darwin*)
+		use_cpu=darwin
+		;;
+esac
 
 dnl Try to use sysctl on freebsd/netbsd if there's no CLOCK_UPTIME
 if test x"$use_uptime" = x"none" ; then
@@ -458,9 +475,17 @@ AC_CHECK_MEMBER([struct statvfs.f_frsize],[AC_DEFINE_UNQUOTED([HAVE_STATVFS_FRSI
 
 AC_MSG_CHECKING([for GCC/Clang to enable hardening flags])
 AS_IF([$CXX --version >/dev/null 2>&1], [
-  CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fno-plt -fPIC"
-  CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fno-plt -fPIC"
-  LDFLAGS="$LDFLAGS -Wl,-z,relro -Wl,-z,now"
+  CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIC"
+  CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIC"
+  case "${host_os}" in
+    *darwin*)
+      ;;
+    *)
+      CXXFLAGS="$CXXFLAGS -fno-plt"
+      CFLAGS="$CFLAGS -fno-plt"
+      LDFLAGS="$LDFLAGS -Wl,-z,relro -Wl,-z,now"
+      ;;
+  esac
 ])
 AC_MSG_RESULT([enabled])
 
@@ -494,6 +519,9 @@ case $use_cpu in
 		;;
 	sysctl)
 		AC_DEFINE_UNQUOTED([USE_CPU_SYSCTL],1,[Use sysctl to probe CPU usage])
+		;;
+	darwin)
+		AC_DEFINE_UNQUOTED([USE_CPU_DARWIN],1,[Use Mach host_processor_info to probe CPU usage])
 		;;
 	none)
 		AC_DEFINE_UNQUOTED([USE_CPU_NONE],1,[No CPU usage])
@@ -543,6 +571,9 @@ case $use_mem in
 		;;
 	sysctlbyname)
 		AC_DEFINE_UNQUOTED([USE_MEM_SYSCTLBYNAME],1,[Use sysctl to probe memory usage])
+		;;
+	darwin)
+		AC_DEFINE_UNQUOTED([USE_MEM_DARWIN],1,[Use Mach and sysctl to probe Darwin memory usage])
 		;;
 	none)
 		AC_DEFINE_UNQUOTED([USE_MEM_NONE],1,[No memory usage])
@@ -636,6 +667,9 @@ case $use_activity in
 	perfstat)
 		AC_DEFINE_UNQUOTED([USE_ACTIVITY_PERFSTAT],1,[Use AIX perfstat to probe disk activity])
 		;;
+	darwin)
+		AC_DEFINE_UNQUOTED([USE_ACTIVITY_DARWIN],1,[Use IOKit to probe Darwin disk activity])
+		;;
 	none)
 		AC_DEFINE_UNQUOTED([USE_ACTIVITY_NONE],1,[No disk activity])
 		;;
@@ -678,6 +712,9 @@ case $use_processes in
 		;;
 	aix)
 		AC_DEFINE_UNQUOTED([USE_PROCESSES_AIX],1,[Use getprocs64/psinfo to probe processes])
+		;;
+	darwin)
+		AC_DEFINE_UNQUOTED([USE_PROCESSES_DARWIN],1,[Use ps to probe processes on Darwin])
 		;;
 	none)
 		AC_DEFINE_UNQUOTED([USE_PROCESSES_NONE],1,[No processes])

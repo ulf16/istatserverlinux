@@ -107,7 +107,87 @@ std::string compress_string(const std::string& str, int compressionlevel = Z_BES
 
     return outstring;
 }
+
+std::string decompress_string(const std::string& str)
+{
+    z_stream zs;
+    memset(&zs, 0, sizeof(zs));
+
+    if (inflateInit(&zs) != Z_OK)
+    {
+	return "";
+    }
+
+    zs.next_in = (Bytef*)str.data();
+    zs.avail_in = str.size();
+
+    int ret;
+    char outbuffer[32768];
+    std::string outstring;
+
+    do {
+        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
+        zs.avail_out = sizeof(outbuffer);
+
+        ret = inflate(&zs, 0);
+
+        if (outstring.size() < zs.total_out) {
+            outstring.append(outbuffer,
+                             zs.total_out - outstring.size());
+        }
+    } while (ret == Z_OK);
+
+    inflateEnd(&zs);
+
+    if (ret != Z_STREAM_END) {
+	return "";
+    }
+
+    return outstring;
+}
 #endif
+
+static bool is_framed_payload(const std::string &header, size_t *length, bool *compressed)
+{
+	bool framed = false;
+	*length = 0;
+	*compressed = false;
+
+	xmlParserCtxtPtr ctxt = xmlNewParserCtxt();
+	xmlDocPtr doc = xmlCtxtReadMemory(ctxt, header.c_str(), header.length(), NULL, NULL, 0);
+	xmlNodePtr root = NULL;
+	if(doc != NULL)
+		root = xmlDocGetRootElement(doc);
+
+	if(root != NULL && xmlStrEqual(root->name, BAD_CAST "isr"))
+	{
+		char *type = (char *)xmlGetProp(root, (const xmlChar *)"type");
+		if(type != NULL && atoi(type) == 105)
+		{
+			char *lengthProp = (char *)xmlGetProp(root, (const xmlChar *)"length");
+			char *compressedProp = (char *)xmlGetProp(root, (const xmlChar *)"c");
+			if(lengthProp != NULL)
+			{
+				*length = strtoul(lengthProp, NULL, 10);
+				framed = true;
+			}
+			if(compressedProp != NULL && atoi(compressedProp) == 1)
+				*compressed = true;
+			if(lengthProp != NULL)
+				free(lengthProp);
+			if(compressedProp != NULL)
+				free(compressedProp);
+		}
+		if(type != NULL)
+			free(type);
+	}
+
+	if(doc != NULL)
+		xmlFreeDoc(doc);
+	xmlFreeParserCtxt(ctxt);
+
+	return framed;
+}
 
 int Socket::listen()
 {
@@ -244,7 +324,7 @@ int Socket::send(string data)
 
 			switch ( SSL_get_error (ssl,r) ){
 				case SSL_ERROR_NONE:
-					data = data.substr(r, readbuf.size() - r);
+					data = data.substr(r);
 					break;
 				case SSL_ERROR_WANT_READ:
 				case SSL_ERROR_WANT_WRITE:
@@ -294,7 +374,7 @@ int Socket::receive(ClientSet * _clients, Config * _config, Stats * _stats)
 			switch ( SSL_get_error (ssl,r) ){
 				case SSL_ERROR_NONE:
 					len += r;
-					readbuf += buf;
+					readbuf.append(buf, r);
 //					if(debugLogging)
 //						cout << "Read bytes " << buf << endl;
 
@@ -336,21 +416,54 @@ int Socket::receive(ClientSet * _clients, Config * _config, Stats * _stats)
 			else
 			{
 				len += ret;
-				readbuf += buf;
+				readbuf.append(buf, ret);
 			}
 		}
 	}
 
-	size_t position = readbuf.find("</isr>");
-	if(position != std::string::npos)
+	while(1)
 	{
+		size_t position = readbuf.find("</isr>");
+		if(position == std::string::npos)
+			break;
+
 		lastRequest = get_current_time();
-		string xml = readbuf.substr(0, position);
+		size_t headerLength = position + 6;
+		string xml = readbuf.substr(0, headerLength);
+
+		size_t payloadLength = 0;
+		bool compressedPayload = false;
+		if(is_framed_payload(xml, &payloadLength, &compressedPayload))
+		{
+			if(readbuf.size() < headerLength + payloadLength)
+				break;
+
+			string payload = readbuf.substr(headerLength, payloadLength);
+			readbuf = readbuf.substr(headerLength + payloadLength);
+			if(compressedPayload)
+			{
+				#ifdef HAVE_LIBZLIB
+				payload = decompress_string(payload);
+				if(payload.size() == 0)
+				{
+					cout << get_description() << " Could not decompress framed request" << endl;
+					continue;
+				}
+				#else
+				cout << get_description() << " Ignoring compressed request without zlib support" << endl;
+				continue;
+				#endif
+			}
+//			if(debugLogging)
+//				cout << get_description() << " Read framed xml data " << payload << endl;
+			parse(payload, _clients, _config, _stats);
+			continue;
+		}
+
 //		if(debugLogging)
 //			cout << get_description() << " Read xml data " << xml << endl;
-		parse(readbuf, _clients, _config, _stats);
-		position += 6;
-		readbuf = readbuf.substr(position, readbuf.size() - position);
+		parse(xml, _clients, _config, _stats);
+		readbuf = readbuf.substr(headerLength);
 	}
 
 	return len;
@@ -511,6 +624,12 @@ void Socket::parse(string _data, ClientSet * _clients, Config * _config, Stats *
 							temp << isr_multiple_data(child, _stats);
 							#endif
 						}
+						if(strcmp(type, "diskinfo") == 0)
+						{
+							#ifndef USE_DISK_NONE
+							temp << isr_multiple_data(child, _stats);
+							#endif
+						}
 						if(strcmp(type, "sensors") == 0)
 						{
 							temp << isr_multiple_data(child, _stats);
@@ -525,6 +644,16 @@ void Socket::parse(string _data, ClientSet * _clients, Config * _config, Stats *
 							temp << isr_multiple_data(child, _stats);
 							#endif
 						}						
+						if(strcmp(type, "smart") == 0)
+						{
+							#ifndef USE_DISK_NONE
+							temp << isr_multiple_data(child, _stats);
+							#endif
+						}
+						if(strcmp(type, "gpu") == 0)
+						{
+							temp << isr_multiple_data(child, _stats);
+						}
 
 						free(type);
 						child = child->next;

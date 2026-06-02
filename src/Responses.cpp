@@ -31,6 +31,8 @@
 
 #include <vector>
 #include <sstream>
+#include <set>
+#include <cctype>
 #include <string.h>
 #include <iostream>
 #include <string.h>
@@ -42,6 +44,119 @@
 #include "Utility.h"
 
 using namespace std;
+
+static string basenameForPath(string path)
+{
+	if(path.size() == 0)
+		return path;
+
+	size_t pos = path.find_last_of('/');
+	if(pos == string::npos)
+		return path;
+	return path.substr(pos + 1);
+}
+
+static string bsdNameForDiskKey(string key)
+{
+	string bsd = basenameForPath(key);
+	if(bsd.substr(0, 5) == "disk:")
+		bsd = bsd.substr(5);
+	return bsd;
+}
+
+static bool isNumberSuffix(string value, size_t pos)
+{
+	if(pos >= value.size())
+		return false;
+	for(size_t i = pos; i < value.size(); i++)
+	{
+		if(value[i] < '0' || value[i] > '9')
+			return false;
+	}
+	return true;
+}
+
+static string lowerCopy(string value)
+{
+	for(size_t i = 0; i < value.size(); ++i)
+		value[i] = (char)tolower((unsigned char)value[i]);
+	return value;
+}
+
+static string gpuSensorUnit(const sensor_info &item)
+{
+	string lowerKey = lowerCopy(item.key);
+	string lowerLabel = lowerCopy(item.label);
+	if((lowerKey.find("memory") != string::npos || lowerLabel.find("memory") != string::npos) &&
+		(lowerKey.find("byte") != string::npos || lowerLabel.find("byte") != string::npos ||
+		 lowerKey.find("gpu") != string::npos || lowerLabel.find("gpu") != string::npos))
+		return "bytes";
+	if(item.kind == 6)
+		return "percent";
+	if(item.kind == 8)
+		return "mhz";
+	if(item.kind == 5)
+		return "watts";
+	if(item.kind == 2)
+		return "rpm";
+	if(item.kind == 0)
+		return "degrees";
+	return "";
+}
+
+static string physicalBSDForPartition(string bsd)
+{
+	if(bsd.size() == 0)
+		return bsd;
+
+	if(bsd.substr(0, 4) == "disk")
+	{
+		size_t s = bsd.find('s', 4);
+		if(s != string::npos && isNumberSuffix(bsd, s + 1))
+			return bsd.substr(0, s);
+		return bsd;
+	}
+
+	size_t p = bsd.rfind('p');
+	if(p != string::npos && p > 0 && isNumberSuffix(bsd, p + 1))
+	{
+		if(bsd.substr(0, 4) == "nvme" || bsd.substr(0, 6) == "mmcblk" || bsd.substr(0, 4) == "loop")
+			return bsd.substr(0, p);
+	}
+
+	size_t end = bsd.size();
+	while(end > 0 && bsd[end - 1] >= '0' && bsd[end - 1] <= '9')
+		end--;
+	if(end > 0 && end < bsd.size())
+	{
+		string prefix = bsd.substr(0, end);
+		if(prefix.substr(0, 2) == "sd" || prefix.substr(0, 2) == "hd" || prefix.substr(0, 2) == "vd" || prefix.substr(0, 3) == "xvd")
+			return prefix;
+	}
+
+	return bsd;
+}
+
+static string devicePathForBSD(string bsd)
+{
+	if(bsd.size() == 0)
+		return "";
+	if(bsd[0] == '/')
+		return bsd;
+	return "/dev/" + bsd;
+}
+
+static bool keyWasRequested(string key, vector<string> keys)
+{
+	if(keys.size() == 0)
+		return true;
+	for(size_t i = 0; i < keys.size(); i++)
+	{
+		if(keys[i] == key)
+			return true;
+	}
+	return false;
+}
 
 string encodeForXml(string sSrc)
 {
@@ -102,7 +217,16 @@ string isr_serverinfo(int session, int auth, string uuid, bool historyEnabled)
 	#endif
 
 	stringstream temp;
-	temp << isr_create_header() << "<isr type=\"101\" build=\""<< SERVER_BUILD << "\" version=\""<< SERVER_VERSION << "\" history=\""<< history << "\" protocol=\""<< PROTOCOL_VERSION << "\" platform=\"" << serverPlatform() << "\" session=\"" << session << "\" uuid=\"" << uuid << "\" auth=\"" << auth << "\"></isr>";
+	string model = serverModel();
+	string os = serverOSVersion();
+
+	temp << isr_create_header() << "<isr type=\"101\" build=\""<< SERVER_BUILD << "\" version=\""<< SERVER_VERSION << "\" history=\""<< history << "\" protocol=\""<< PROTOCOL_VERSION << "\"";
+	if(model.size() > 0)
+		temp << " model=\"" << encodeForXml(model) << "\"";
+	temp << " platform=\"" << serverPlatform() << "\" session=\"" << session << "\" uuid=\"" << uuid << "\"";
+	if(os.size() > 0)
+		temp << " os=\"" << encodeForXml(os) << "\"";
+	temp << " auth=\"" << auth << "\"></isr>";
 	return temp.str();
 }
 
@@ -185,7 +309,16 @@ string isr_memory_data(xmlNodePtr node, Stats *stats)
 				break;
 		}
 
-		output << "<stat type=\"memory\" interval=\"" << x << "\" session=\"" << stats->memoryStats.session << "\" id=\"" << stats->memoryStats.sampleIndex[x].sampleID << "\" samples=\"" << samples.size() << "\">";
+		double pressure = -1;
+		if(samples.size() > 0)
+			pressure = samples.back().values[memory_value_pressure];
+		else if(stats->memoryStats.samples[0].size() > 0)
+			pressure = stats->memoryStats.samples[0].front().values[memory_value_pressure];
+
+		output << "<stat type=\"memory\" interval=\"" << x << "\" session=\"" << stats->memoryStats.session << "\" id=\"" << stats->memoryStats.sampleIndex[x].sampleID << "\" samples=\"" << samples.size() << "\"";
+		if(pressure >= 0)
+			output << " pressure=\"" << pressure << "\"";
+		output << ">";
 		for(size_t i = 0;i < samples.size(); i++)
 		{
 			struct mem_data mem = samples[i];	
@@ -200,25 +333,29 @@ string isr_memory_data(xmlNodePtr node, Stats *stats)
 			if(mem.values[memory_value_used] >= 0)
 				output << " u=\"" << mem.values[memory_value_used] << "\"";
 			if(mem.values[memory_value_wired] >= 0)
-				output << " w=\"" << mem.values[memory_value_wired] << "\"";
+				output << " w=\"" << mem.values[memory_value_wired] << "\" wired=\"" << mem.values[memory_value_wired] << "\"";
 			if(mem.values[memory_value_cached] >= 0)
 				output << " ca=\"" << mem.values[memory_value_cached] << "\"";
+			if(mem.values[memory_value_compressed] >= 0)
+				output << " compressed=\"" << mem.values[memory_value_compressed] << "\"";
+			if(mem.values[memory_value_pressure] >= 0)
+				output << " pressure=\"" << mem.values[memory_value_pressure] << "\"";
 			if(mem.values[memory_value_active] >= 0)
-				output << " a=\"" << mem.values[memory_value_active] << "\"";
+				output << " a=\"" << mem.values[memory_value_active] << "\" active=\"" << mem.values[memory_value_active] << "\"";
 			if(mem.values[memory_value_inactive] >= 0)
-				output << " i=\"" << mem.values[memory_value_inactive] << "\"";
+				output << " i=\"" << mem.values[memory_value_inactive] << "\" inactive=\"" << mem.values[memory_value_inactive] << "\"";
 			if(mem.values[memory_value_free] >= 0)
-				output << " f=\"" << mem.values[memory_value_free] << "\"";
+				output << " f=\"" << mem.values[memory_value_free] << "\" free=\"" << mem.values[memory_value_free] << "\"";
 			if(mem.values[memory_value_total] >= 0)
-				output << " t=\"" << mem.values[memory_value_total] << "\"";
+				output << " t=\"" << mem.values[memory_value_total] << "\" total=\"" << mem.values[memory_value_total] << "\"";
 			if(mem.values[memory_value_swapused] >= 0)
-				output << " su=\"" << mem.values[memory_value_swapused]  << "\"";
+				output << " su=\"" << mem.values[memory_value_swapused]  << "\" swapused=\"" << mem.values[memory_value_swapused] << "\"";
 			if(mem.values[memory_value_swaptotal] >= 0)
-				output << " st=\"" << mem.values[memory_value_swaptotal] << "\"";
+				output << " st=\"" << mem.values[memory_value_swaptotal] << "\" swaptotal=\"" << mem.values[memory_value_swaptotal] << "\"";
 			if(mem.values[memory_value_swapin] >= 0)
-				output << " pi=\"" << mem.values[memory_value_swapin] << "\"";
-			if(mem.values[memory_value_swapin] >= 0)
-				output << " po=\"" << mem.values[memory_value_swapout] << "\"";
+				output << " pi=\"" << mem.values[memory_value_swapin] << "\" pageins=\"" << mem.values[memory_value_swapin] << "\" pagesinsf=\"" << mem.values[memory_value_swapin] << "\"";
+			if(mem.values[memory_value_swapout] >= 0)
+				output << " po=\"" << mem.values[memory_value_swapout] << "\" pageouts=\"" << mem.values[memory_value_swapout] << "\" pageoutsf=\"" << mem.values[memory_value_swapout] << "\"";
 			if(mem.values[memory_value_virtualtotal] >= 0)
 				output << " vt=\"" << mem.values[memory_value_virtualtotal] << "\"";
 			if(mem.values[memory_value_virtualactive] >= 0)
@@ -334,14 +471,35 @@ string isr_multiple_data(xmlNodePtr node, Stats *stats)
 
 	char *type = (char *)xmlGetProp(node, (const xmlChar *)"type");
 	xmlNodePtr child = node->children;
+	bool processedChild = false;
 	while (child){
+		if(child->type != XML_ELEMENT_NODE)
+		{
+			child = child->next;
+			continue;
+		}
+		processedChild = true;
+
 		char *identifiers = (char *)xmlGetProp(child, (const xmlChar *)"samples");
 		char *keys = (char *)xmlGetProp(child, (const xmlChar *)"keys");
 
-		vector<string> identifierItems = explode(string(identifiers), "|");
+		vector<string> identifierItems;
+		if(identifiers != NULL)
+			identifierItems = explode(string(identifiers), "|");
+		else
+			identifierItems.push_back("0");
+
 		vector<string> keyItems;
 		if(keys != NULL)
-			 keyItems = explode(string(keys), "|");
+		{
+			string keyString = string(keys);
+			for(size_t i = 0; i < keyString.size(); i++)
+			{
+				if(keyString[i] == ',')
+					keyString[i] = '|';
+			}
+			keyItems = explode(keyString, "|");
+		}
 
 		for(uint x = 0;x < identifierItems.size(); x++)
 		{
@@ -355,17 +513,35 @@ string isr_multiple_data(xmlNodePtr node, Stats *stats)
 				output << isr_sensor_data(x, sampleID, stats->sensorStats, keyItems, &addedKeys);
 			else if(strcmp(type, "disks") == 0)
 				output << isr_disk_data(x, sampleID, stats->diskStats, keyItems, &addedKeys);
+			else if(strcmp(type, "diskinfo") == 0)
+				output << isr_diskinfo_data(x, sampleID, stats->diskStats, keyItems, &addedKeys);
 			else if(strcmp(type, "processes") == 0)
 				output << isr_process_data(x, sampleID, stats->processStats, keyItems, &addedKeys);
 			else if(strcmp(type, "battery") == 0)
 				output << isr_battery_data(x, sampleID, stats->batteryStats, keyItems, &addedKeys);
+			else if(strcmp(type, "smart") == 0)
+				output << isr_smart_data(x, sampleID, stats->diskStats, keyItems, &addedKeys);
+			else if(strcmp(type, "gpu") == 0)
+				output << isr_gpu_data(x, sampleID, stats->sensorStats, keyItems, &addedKeys);
 		}
 
 		if(keys != NULL)
 			free(keys);
 
-		free(identifiers);
+		if(identifiers != NULL)
+			free(identifiers);
 		child = child->next;
+	}
+
+	if(!processedChild)
+	{
+		vector<string> keyItems;
+		if(strcmp(type, "diskinfo") == 0)
+			output << isr_diskinfo_data(0, 0, stats->diskStats, keyItems, &addedKeys);
+		else if(strcmp(type, "smart") == 0)
+			output << isr_smart_data(0, 0, stats->diskStats, keyItems, &addedKeys);
+		else if(strcmp(type, "gpu") == 0)
+			output << isr_gpu_data(0, 0, stats->sensorStats, keyItems, &addedKeys);
 	}
 	free(type);
 	return output.str();
@@ -400,7 +576,7 @@ string isr_activity_data(int index, long sampleID, StatsActivity stats, vector<s
 		output << "<item uuid=\"" << encodeForXml(item.device) << "\" samples=\"" << samples.size() << "\"";
 		if(index == 0)
 		{
-			output << " name=\"" << encodeForXml(item.device) << "\" r=\"" << item.last_r << "\" w=\"" << item.last_w << "\" rio=\"" << item.last_rIOPS << "\" wio=\"" << item.last_wIOPS << "\"";
+			output << " name=\"" << encodeForXml(item.displayName) << "\" r=\"" << item.last_r << "\" w=\"" << item.last_w << "\" rio=\"" << item.last_rIOPS << "\" wio=\"" << item.last_wIOPS << "\"";
 			if(item.mounts.size() > 0)
 			{
 				output << " mounts=\"";
@@ -470,6 +646,40 @@ string isr_disk_data(int index, long sampleID, StatsDisks stats, vector<string> 
 	return output.str();
 }
 
+string isr_diskinfo_data(int index, long sampleID, StatsDisks stats, vector<string> keys, vector<string> *added)
+{
+	stringstream output;
+	output << "<stat type=\"diskinfo\" interval=\"" << index << "\" session=\"" << stats.session << "\" id=\"" << stats.sampleIndex[index].sampleID << "\">";
+
+	for(size_t itemindex = 0;itemindex < stats._items.size(); itemindex++)
+	{
+		disk_info item = stats._items[itemindex];
+		if(!item.active)
+			continue;
+
+		string bsd = bsdNameForDiskKey(item.key);
+		string physical = physicalBSDForPartition(bsd);
+		string physicalKey = devicePathForBSD(physical);
+
+		bool requested = keyWasRequested(item.key, keys) || keyWasRequested(item.uuid, keys) || keyWasRequested(bsd, keys) || keyWasRequested(physical, keys) || keyWasRequested(physicalKey, keys);
+		if(!requested)
+			continue;
+
+		if(!shouldAddKey(index, item.key, vector<string>(), added))
+			continue;
+
+		output << "<item uuid=\"" << encodeForXml(item.uuid) << "\" key=\"" << encodeForXml(item.key) << "\" bsd=\"" << encodeForXml(bsd) << "\" name=\"" << encodeForXml(item.displayName) << "\" type=\"volume\"";
+		if(physical.size() > 0)
+			output << " physical=\"" << encodeForXml(physical) << "\"";
+		if(bsd.size() > 0)
+			output << " partitions=\"" << encodeForXml(bsd) << "\"";
+		output << " samples=\"0\"></item>";
+	}
+	output << "</stat>";
+
+	return output.str();
+}
+
 string isr_uptime_data(long uptime)
 {
 	#ifdef USE_UPTIME_NONE
@@ -528,6 +738,18 @@ string isr_sensor_data(int index, long sampleID, StatsSensors stats, vector<stri
 	for(size_t itemindex = 0;itemindex < stats._items.size(); itemindex++)
 	{
 		sensor_info item = stats._items[itemindex];
+		string lowerKey = item.key;
+		string lowerLabel = item.label;
+		for(size_t i = 0; i < lowerKey.size(); ++i)
+			lowerKey[i] = (char)tolower((unsigned char)lowerKey[i]);
+		for(size_t i = 0; i < lowerLabel.size(); ++i)
+			lowerLabel[i] = (char)tolower((unsigned char)lowerLabel[i]);
+		bool gpuOnlyUnit = (item.kind == 6 || item.kind == 7) &&
+			(lowerKey.find("gpu") != string::npos || lowerKey.find("agx") != string::npos || lowerKey.find("mali") != string::npos ||
+			 lowerLabel.find("gpu") != string::npos || lowerLabel.find("graphics") != string::npos);
+		if(gpuOnlyUnit)
+			continue;
+
 		if(!shouldAddKey(index, item.key, keys, added))
 			continue;
 
@@ -543,7 +765,12 @@ string isr_sensor_data(int index, long sampleID, StatsSensors stats, vector<stri
 				break;
 		}
 
-		output << "<item low=\"" << item.lowestValue << "\" high=\"" << item.highestValue << "\" uuid=\"" << item.key << "\" name=\"" << encodeForXml(item.label) << "\" type=\"" << item.kind << "\" samples=\"" << samples.size() << "\">";
+		string encodedKey = encodeForXml(item.key);
+		output << "<item low=\"" << item.lowestValue << "\" high=\"" << item.highestValue << "\" uuid=\"" << encodedKey << "\" key=\"" << encodedKey << "\" name=\"" << encodeForXml(item.label) << "\" type=\"" << item.kind << "\" samples=\"" << samples.size() << "\"";
+#if defined(__APPLE__)
+		output << " d=\"1\"";
+#endif
+		output << ">";
 		for(size_t i = 0;i < samples.size(); i++)
 		{
 			struct sensor_data sample = samples[i];	
@@ -568,6 +795,91 @@ string isr_battery_data(int index, long sampleID, StatsBattery stats, vector<str
 			continue;
 
 		output << "<item uuid=\"" << item.key << "\" health=\"" << item.health << "\" time=\"" << item.timeRemaining << "\" cycles=\"" << item.cycles << "\" state=\"" << item.state << "\" source=\"" << item.source << "\" percentage=\"" << item.percentage << "\">";
+		output << "</item>";
+	}
+	output << "</stat>";
+
+	return output.str();
+}
+
+string isr_smart_data(int index, long sampleID, StatsDisks stats, vector<string> keys, vector<string> *added)
+{
+	stringstream output;
+	output << "<stat type=\"smart\" interval=\"" << index << "\" session=\"" << stats.session << "\" id=\"" << stats.sampleIndex[index].sampleID << "\">";
+
+	set<string> emitted;
+	for(size_t itemindex = 0;itemindex < stats._items.size(); itemindex++)
+	{
+		disk_info item = stats._items[itemindex];
+		if(!item.active)
+			continue;
+
+		string bsd = bsdNameForDiskKey(item.key);
+		string physical = physicalBSDForPartition(bsd);
+		string physicalKey = devicePathForBSD(physical);
+		if(physical.size() == 0 || emitted.find(physical) != emitted.end())
+			continue;
+
+		bool requested = keyWasRequested(item.key, keys) || keyWasRequested(item.uuid, keys) || keyWasRequested(bsd, keys) || keyWasRequested(physical, keys) || keyWasRequested(physicalKey, keys);
+		if(!requested)
+			continue;
+
+		if(!shouldAddKey(index, physicalKey, vector<string>(), added))
+			continue;
+
+		emitted.insert(physical);
+		output << "<item uuid=\"" << encodeForXml(physicalKey) << "\" key=\"" << encodeForXml(physicalKey) << "\" bsd=\"" << encodeForXml(physical) << "\" samples=\"0\"></item>";
+	}
+	output << "</stat>";
+
+	return output.str();
+}
+
+string isr_gpu_data(int index, long sampleID, StatsSensors stats, vector<string> keys, vector<string> *added)
+{
+	stringstream output;
+	output << "<stat type=\"gpu\" interval=\"" << index << "\" session=\"" << stats.session << "\" id=\"" << stats.sampleIndex[index].sampleID << "\" partial=\"1\">";
+
+	for(size_t itemindex = 0; itemindex < stats._items.size(); itemindex++)
+	{
+		sensor_info item = stats._items[itemindex];
+		string key = item.key;
+		string label = item.label;
+		string lowerKey = key;
+		string lowerLabel = label;
+		for(size_t i = 0; i < lowerKey.size(); ++i)
+			lowerKey[i] = (char)tolower((unsigned char)lowerKey[i]);
+		for(size_t i = 0; i < lowerLabel.size(); ++i)
+			lowerLabel[i] = (char)tolower((unsigned char)lowerLabel[i]);
+
+		if(lowerKey.find("gpu") == string::npos && lowerKey.find("mali") == string::npos && lowerKey.find("agx") == string::npos &&
+			lowerLabel.find("gpu") == string::npos && lowerLabel.find("mali") == string::npos && lowerLabel.find("graphics") == string::npos)
+			continue;
+
+		if(!shouldAddKey(index, item.key, keys, added))
+			continue;
+
+		deque<sensor_data> samples;
+		for(size_t i = 0; i < item.samples[index].size(); i++)
+		{
+			sensor_data sample = item.samples[index][i];
+			if(sample.sampleID > sampleID)
+				samples.push_front(sample);
+			else
+				break;
+		}
+
+		string encodedKey = encodeForXml(item.key);
+		string unit = gpuSensorUnit(item);
+		output << "<item low=\"" << item.lowestValue << "\" high=\"" << item.highestValue << "\" uuid=\"" << encodedKey << "\" key=\"" << encodedKey << "\" name=\"" << encodeForXml(item.label) << "\" type=\"" << item.kind << "\" samples=\"" << samples.size() << "\"";
+		if(unit.size() > 0)
+			output << " unit=\"" << encodeForXml(unit) << "\"";
+		output << ">";
+		for(size_t i = 0; i < samples.size(); i++)
+		{
+			struct sensor_data sample = samples[i];
+			output << "<s id=\"" << sample.sampleID << "\" time=\"" << (long long)sample.time << "\" v=\"" << sample.value << "\"></s>";
+		}
 		output << "</item>";
 	}
 	output << "</stat>";

@@ -1,0 +1,147 @@
+#!/bin/bash
+set -euo pipefail
+
+OUT="/opt/istatserverlinux/var/powermetrics.kv"
+OUTDIR="$(dirname "$OUT")"
+LOCKDIR="${OUT}.lockdir"
+
+install -d -m 0755 "$OUTDIR"
+
+lock_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  NOW="$(date +%s)"
+  MTIME="$(lock_mtime "$LOCKDIR")"
+  if [ "$MTIME" -gt 0 ] && [ $((NOW - MTIME)) -gt 120 ]; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+    mkdir "$LOCKDIR" 2>/dev/null || exit 0
+  else
+    exit 0
+  fi
+fi
+cleanup(){ rmdir "$LOCKDIR" 2>/dev/null || true; }
+trap cleanup EXIT
+
+RAW="$(mktemp -t pm_raw.XXXXXX)"
+PL1="$(mktemp -t pm_pl1.XXXXXX)"
+PL2="$(mktemp -t pm_pl2.XXXXXX)"
+KV="$(mktemp -t pm_kv.XXXXXX)"
+trap 'rm -f "$RAW" "$PL1" "$PL2" "$KV"; cleanup' EXIT
+
+PY="/usr/bin/python3"
+[ -x /opt/homebrew/bin/python3 ] && PY="/opt/homebrew/bin/python3"
+PM="/usr/bin/powermetrics"
+
+if ! "$PM" -n 1 --samplers thermal,cpu_power,gpu_power --format plist >"$RAW" 2>&1; then
+  echo "[helper] powermetrics failed" >&2
+  exit 0
+fi
+[ -s "$RAW" ] || { echo "[helper] empty powermetrics output" >&2; exit 0; }
+
+if head -c 8 "$RAW" | grep -q '^bplist00'; then
+  cp "$RAW" "$PL1"
+else
+  START=$(grep -n '<plist' "$RAW" | head -1 | cut -d: -f1 || true)
+  if [ -n "${START:-}" ]; then
+    tail -n +"$START" "$RAW" > "$PL1"
+  else
+    OFF=$(LC_ALL=C grep -oba 'bplist00' "$RAW" | head -1 | cut -d: -f1 || true)
+    if [ -n "${OFF:-}" ]; then
+      dd if="$RAW" of="$PL1" bs=1 skip="$OFF" status=none
+    else
+      echo "[helper] not a plist" >&2
+      exit 0
+    fi
+  fi
+fi
+
+if /usr/bin/plutil -convert binary1 -o "$PL2" "$PL1" >/dev/null 2>&1; then
+  SRC="$PL2"
+else
+  SRC="$PL1"
+fi
+
+"$PY" - "$SRC" >"$KV" <<'PYCODE'
+import sys, plistlib
+
+def to_mhz_cluster(c):
+    fhz = c.get("freq_hz")
+    if isinstance(fhz, (int, float)):
+        return fhz / 1e6 if fhz > 1e4 else fhz
+    num = den = 0.0
+    for cpu in c.get("cpus", []):
+        for s in cpu.get("dvfm_states", []):
+            f = s.get("freq")
+            r = s.get("used_ratio")
+            if isinstance(f, (int, float)) and isinstance(r, (int, float)):
+                num += f * r
+                den += r
+    return (num / den) if den > 0 else None
+
+def to_w(x):
+    if not isinstance(x, (int, float)):
+        return None
+    return x / 1000.0 if x >= 10 else x
+
+with open(sys.argv[1], "rb") as f:
+    d = plistlib.load(f)
+
+proc = d.get("processor", {})
+gpu = d.get("gpu", {})
+
+E = P = None
+for c in proc.get("clusters", []):
+    if c.get("name") == "E-Cluster":
+        E = to_mhz_cluster(c)
+    if c.get("name") == "P-Cluster":
+        P = to_mhz_cluster(c)
+
+GFm = None
+GF = gpu.get("freq_hz")
+if isinstance(GF, (int, float)):
+    GFm = GF if GF < 1e4 else GF / 1e6
+if GFm is None or GFm < 50 or GFm > 5000:
+    num = den = 0.0
+    for s in gpu.get("dvfm_states", []):
+        f = s.get("freq")
+        r = s.get("used_ratio")
+        if isinstance(f, (int, float)) and isinstance(r, (int, float)):
+            num += f * r
+            den += r
+    if den > 0:
+        GFm = num / den
+
+CPUW = proc.get("cpu_power")
+GPUW = gpu.get("gpu_power")
+ANEW = proc.get("ane_power")
+if GPUW is None:
+    en = gpu.get("gpu_energy")
+    el = d.get("elapsed_ns")
+    if isinstance(en, (int, float)) and isinstance(el, (int, float)) and el > 0:
+        candidates = [en / (el / 1e9), (en / 1000.0) / (el / 1e9)]
+        candidates = [x for x in candidates if 0 < x < 80]
+        if candidates:
+            GPUW = min(candidates)
+
+TP_MAP = {"Nominal": 0, "Moderate": 1, "Heavy": 2, "Critical": 3}
+TP = TP_MAP.get(d.get("thermal_pressure"))
+
+def out(k, v):
+    if v is not None:
+        print(f"{k}={v}")
+
+out("E", E)
+out("P", P)
+out("GPUF", GFm)
+out("CPUW", to_w(CPUW))
+out("GPUW", to_w(GPUW))
+out("ANEW", to_w(ANEW) if ANEW is not None else 0.0)
+if TP is not None:
+    out("TP", TP)
+PYCODE
+
+install -d -m 0755 "$OUTDIR"
+install -m 0644 "$KV" "$OUT".new
+mv -f "$OUT".new "$OUT"

@@ -55,6 +55,7 @@ std::string isr_multiple_data(xmlNodePtr node, Stats *stats);
 std::string isr_cpu_data(xmlNodePtr node, Stats *stats);
 std::string isr_network_data(int index, long sampleID, StatsNetwork stats, std::vector<std::string> keys, std::vector<std::string> *added);
 std::string isr_disk_data(int index, long sampleID, StatsDisks stats, std::vector<std::string> keys, std::vector<std::string> *added);
+std::string isr_diskinfo_data(int index, long sampleID, StatsDisks stats, std::vector<std::string> keys, std::vector<std::string> *added);
 std::string isr_uptime_data(long uptime);
 std::string isr_loadavg_data(xmlNodePtr node, Stats *stats);
 std::string isr_memory_data(xmlNodePtr node, Stats *stats);
@@ -64,5 +65,7 @@ std::string isr_sensor_data(int index, long sampleID, StatsSensors stats, std::v
 std::string isr_activity_data(int index, long sampleID, StatsActivity stats, std::vector<std::string> keys, std::vector<std::string> *added);
 std::string isr_battery_data(int index, long sampleID, StatsBattery stats, std::vector<std::string> keys, std::vector<std::string> *added);
 std::string isr_process_data(int index, long sampleID, StatsProcesses stats, std::vector<std::string> keys, std::vector<std::string> *added);
+std::string isr_smart_data(int index, long sampleID, StatsDisks stats, std::vector<std::string> keys, std::vector<std::string> *added);
+std::string isr_gpu_data(int index, long sampleID, StatsSensors stats, std::vector<std::string> keys, std::vector<std::string> *added);
 
 #endif

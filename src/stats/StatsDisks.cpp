@@ -44,6 +44,47 @@ using namespace std;
 #ifdef USE_DISK_STATFS
 int StatsDisks::get_sizes(const char *dev, struct disk_data *data)
 {
+#ifdef __APPLE__
+	string sizePath = dev;
+	if(!strcmp(dev, "/") && access("/System/Volumes/Data", R_OK) == 0)
+		sizePath = "/System/Volumes/Data";
+
+	string escaped;
+	for (const char *p = sizePath.c_str(); *p != '\0'; ++p)
+	{
+		if (*p == '\'')
+			escaped += "'\\''";
+		else
+			escaped += *p;
+	}
+
+	string command = "/bin/df -kP '" + escaped + "' 2>/dev/null";
+	FILE *fp = popen(command.c_str(), "r");
+	if (fp != NULL)
+	{
+		char line[1024];
+		if (fgets(line, sizeof(line), fp) != NULL && fgets(line, sizeof(line), fp) != NULL)
+		{
+			unsigned long long total = 0;
+			unsigned long long used = 0;
+			unsigned long long free = 0;
+			if (sscanf(line, "%*s %llu %llu %llu", &total, &used, &free) == 3)
+			{
+				pclose(fp);
+				data->t = (double)(total * 1024ULL);
+				data->u = (double)(used * 1024ULL);
+				data->f = (double)(free * 1024ULL);
+				if((data->u + data->f) > 0)
+					data->p = ((float)data->u / (data->u + data->f)) * 100;
+				else
+					data->p = 0;
+				return 0;
+			}
+		}
+		pclose(fp);
+	}
+#endif
+
 #ifdef HAVE_STATVFS
 	struct statvfs space;
 	if (statvfs(dev, &space) == 0)
@@ -78,6 +119,14 @@ int StatsDisks::should_ignore_mount(char *mount)
 {
 	if(disableFiltering == 1)
 		return 0;
+
+#ifdef __APPLE__
+	if(!strcmp(mount, "/"))
+		return 0;
+	if(!strncmp(mount, "/Volumes/", 9))
+		return 0;
+	return 1;
+#endif
 
 	if(!strncmp(mount, "/export", 7))
 		return 1;
@@ -312,6 +361,39 @@ void StatsDisks::processDisk(char *name, char *mount, char *type)
 					disk_label = (*curdisk).name;
 				else
 					disk_label = (*curdisk).key;
+
+#ifdef __APPLE__
+				if((*curdisk).name == "/")
+				{
+					DIR *volumes = opendir("/Volumes");
+					if(volumes != NULL)
+					{
+						struct dirent *entry;
+						while((entry = readdir(volumes)) != NULL)
+						{
+							if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+								continue;
+							string path = "/Volumes/" + string(entry->d_name);
+							char target[PATH_MAX];
+							ssize_t len = readlink(path.c_str(), target, sizeof(target) - 1);
+							if(len > 0)
+							{
+								target[len] = '\0';
+								if(!strcmp(target, "/"))
+								{
+									disk_label = entry->d_name;
+									break;
+								}
+							}
+						}
+						closedir(volumes);
+					}
+				}
+				else if(!strncmp((*curdisk).name.c_str(), "/Volumes/", 9))
+				{
+					disk_label = (*curdisk).name.substr(9);
+				}
+#endif
 			
 				// Set custom disk label if configured. Will override everything.
 				if (disk_label_custom.length())

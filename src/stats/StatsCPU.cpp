@@ -31,6 +31,12 @@
 
 #include "StatsCPU.h"
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <mach/processor_info.h>
+#endif
+
 using namespace std;
 
 #if defined(USE_CPU_HPUX)
@@ -387,6 +393,42 @@ void StatsCPU::update(long long sampleID)
 	samples[0].push_front(_cpu);	
 	if (samples[0].size() > HISTORY_SIZE) samples[0].pop_back();
 }/*USE_CPU_PERFSTAT*/
+
+#elif defined(USE_CPU_DARWIN)
+
+void StatsCPU::init()
+{
+	_init();
+}
+
+void StatsCPU::update(long long sampleID)
+{
+	natural_t ncpu = 0;
+	processor_info_array_t infoArray = NULL;
+	mach_msg_type_number_t infoCount = 0;
+
+	kern_return_t kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &ncpu, &infoArray, &infoCount);
+	if (kr != KERN_SUCCESS || infoArray == NULL || ncpu == 0)
+		return;
+
+	unsigned long long user = 0;
+	unsigned long long nice = 0;
+	unsigned long long system = 0;
+	unsigned long long idle = 0;
+
+	processor_cpu_load_info_t cpuInfo = (processor_cpu_load_info_t)infoArray;
+	for (natural_t i = 0; i < ncpu; ++i)
+	{
+		user += (unsigned long long)cpuInfo[i].cpu_ticks[CPU_STATE_USER];
+		nice += (unsigned long long)cpuInfo[i].cpu_ticks[CPU_STATE_NICE];
+		system += (unsigned long long)cpuInfo[i].cpu_ticks[CPU_STATE_SYSTEM];
+		idle += (unsigned long long)cpuInfo[i].cpu_ticks[CPU_STATE_IDLE];
+	}
+
+	vm_deallocate(mach_task_self(), (vm_address_t)infoArray, infoCount * sizeof(integer_t));
+
+	processSample(sampleID, user, nice, system, idle, 0, 0);
+}
 
 #else
 

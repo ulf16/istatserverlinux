@@ -74,6 +74,8 @@ int check_file_exist(const std::string & _file);
 int create_directory(const std::string &_dir, mode_t _mask);
 double get_current_time();
 int serverPlatform();
+std::string serverModel();
+std::string serverOSVersion();
 std::string get_current_time_string();
 
 std::string trim(const std::string & _source, const char * _delims = " \t\r\n");

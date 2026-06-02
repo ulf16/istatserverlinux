@@ -228,6 +228,86 @@ void StatsMemory::update(long long sampleID)
 	addSample(_mem, sampleID);
 }
 
+#elif defined(USE_MEM_DARWIN)
+
+void StatsMemory::init()
+{
+	databaseKeys.push_back("total");
+	databaseKeys.push_back("free");
+	databaseKeys.push_back("active");
+	databaseKeys.push_back("inactive");
+	databaseKeys.push_back("wired");
+	databaseKeys.push_back("cached");
+	databaseKeys.push_back("used");
+	databaseKeys.push_back("swaptotal");
+	databaseKeys.push_back("swapused");
+	databaseKeys.push_back("swapin");
+	databaseKeys.push_back("swapout");
+	databaseKeys.push_back("compressed");
+
+	databaseMap.push_back(memory_value_total);
+	databaseMap.push_back(memory_value_free);
+	databaseMap.push_back(memory_value_active);
+	databaseMap.push_back(memory_value_inactive);
+	databaseMap.push_back(memory_value_wired);
+	databaseMap.push_back(memory_value_cached);
+	databaseMap.push_back(memory_value_used);
+	databaseMap.push_back(memory_value_swaptotal);
+	databaseMap.push_back(memory_value_swapused);
+	databaseMap.push_back(memory_value_swapin);
+	databaseMap.push_back(memory_value_swapout);
+	databaseMap.push_back(memory_value_compressed);
+
+	_init();
+}
+
+void StatsMemory::update(long long sampleID)
+{
+	mem_data _mem;
+	prepareSample(&_mem);
+
+	vm_statistics64_data_t vmstat;
+	mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+	vm_size_t pagesize = 0;
+
+	if (host_page_size(mach_host_self(), &pagesize) != KERN_SUCCESS)
+		pagesize = getpagesize();
+
+	if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vmstat, &count) != KERN_SUCCESS)
+		return;
+
+	uint64_t total = 0;
+	size_t len = sizeof(total);
+	if (sysctlbyname("hw.memsize", &total, &len, NULL, 0) < 0)
+		total = (uint64_t)(vmstat.free_count + vmstat.active_count + vmstat.inactive_count + vmstat.wire_count) * (uint64_t)pagesize;
+
+	_mem.values[memory_value_total] = (double)total;
+	_mem.values[memory_value_free] = (double)((uint64_t)vmstat.free_count * (uint64_t)pagesize);
+	_mem.values[memory_value_active] = (double)((uint64_t)vmstat.active_count * (uint64_t)pagesize);
+	_mem.values[memory_value_inactive] = (double)((uint64_t)vmstat.inactive_count * (uint64_t)pagesize);
+	_mem.values[memory_value_wired] = (double)((uint64_t)vmstat.wire_count * (uint64_t)pagesize);
+	_mem.values[memory_value_cached] = (double)((uint64_t)vmstat.external_page_count * (uint64_t)pagesize);
+	_mem.values[memory_value_compressed] = (double)((uint64_t)vmstat.compressor_page_count * (uint64_t)pagesize);
+	_mem.values[memory_value_used] = (double)(total - (uint64_t)_mem.values[memory_value_free] - (uint64_t)_mem.values[memory_value_inactive]);
+	_mem.values[memory_value_swapin] = (double)((uint64_t)vmstat.swapins * (uint64_t)pagesize);
+	_mem.values[memory_value_swapout] = (double)((uint64_t)vmstat.swapouts * (uint64_t)pagesize);
+
+	int pressure = 0;
+	len = sizeof(pressure);
+	if (sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &len, NULL, 0) >= 0)
+		_mem.values[memory_value_pressure] = (double)pressure;
+
+	struct xsw_usage swap;
+	len = sizeof(swap);
+	if (sysctlbyname("vm.swapusage", &swap, &len, NULL, 0) >= 0)
+	{
+		_mem.values[memory_value_swaptotal] = (double)swap.xsu_total;
+		_mem.values[memory_value_swapused] = (double)swap.xsu_used;
+	}
+
+	addSample(_mem, sampleID);
+}
+
 #elif defined(USE_MEM_SYSCTL)
 
 void StatsMemory::init()

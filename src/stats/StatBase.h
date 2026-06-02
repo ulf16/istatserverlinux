@@ -221,6 +221,12 @@
 # include <sys/proc.h>
 #endif
 
+#ifdef __APPLE__
+# include <mach/mach.h>
+# include <mach/mach_host.h>
+# include <mach/vm_statistics.h>
+#endif
+
 #ifdef HAVE_LIBPERFSTAT_H
 # include <libperfstat.h>
 #endif

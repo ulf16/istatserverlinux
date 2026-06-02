@@ -113,8 +113,16 @@ int main(int argc, char ** argv)
 		return 0;
 	}
 	
-//	string config_directory = arguments.get("c", string(CONFIG_PATH));
-	string config_directory = string(CONFIG_PATH);
+	string config_directory = arguments.get("c", string(CONFIG_PATH));
+	if(config_directory.size() > 0 && config_directory.substr(config_directory.size() - 5) == ".conf")
+	{
+		size_t pos = config_directory.find_last_of('/');
+		config_directory = pos == string::npos ? string(CONFIG_PATH) : config_directory.substr(0, pos + 1);
+	}
+	else if(config_directory.size() > 0 && config_directory[config_directory.size() - 1] != '/')
+	{
+		config_directory += "/";
+	}
 
 	// Load and parse configuration
 	Config config(config_directory + "istatserver.conf");

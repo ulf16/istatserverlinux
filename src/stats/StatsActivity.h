@@ -48,6 +48,7 @@ class activity_info
 		unsigned long long last_wIOPS;
 		
 		std::string device;		
+		std::string displayName;
 		std::vector<std::string> mounts;
 	   	std::deque<activity_data> samples[8];
 };
@@ -59,7 +60,7 @@ class StatsActivity : public StatsBase
 		void init();
 		void prepareUpdate();
 		void createDisk(std::string key);
-		void processDisk(std::string key, long long sampleID, unsigned long long read, unsigned long long write, unsigned long long reads, unsigned long long writes);
+		void processDisk(std::string key, long long sampleID, unsigned long long read, unsigned long long write, unsigned long long reads, unsigned long long writes, std::string displayName = "");
 
 		void _init();
 		#ifdef USE_SQLITE

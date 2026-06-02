@@ -48,7 +48,7 @@ class process_info
 		unsigned long long io_write;
 		unsigned long long io_read_total;
 		unsigned long long io_write_total;
-		unsigned long memory;
+		unsigned long long memory;
 		double cpuTime;
 		double lastClockTime;
 		long threads;

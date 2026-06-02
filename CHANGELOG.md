@@ -1,5 +1,44 @@
 # iStat Server for Linux – Changelog
 
+## v1.2.0 — 2026-06-02
+**“Apple Silicon and Full Telemetry Edition”**
+
+This release brings the maintained fork in line with the telemetry expected by
+iStat View-compatible clients on modern Linux systems and Apple Silicon Macs.
+
+### Major Changes
+- Added preliminary macOS Apple Silicon support, tested on Mac mini M1.
+- Added macOS CPU, memory, uptime, load, task list, network, disk, disk I/O,
+  sensors, fan, frequency, power, and GPU telemetry.
+- Added macOS memory pressure and additional memory fields used by the classic
+  iStat View macOS layout.
+- Added APFS-aware disk capacity reporting and disk I/O mapping from BSD disk
+  names back to displayed volumes, including multi-disk volumes.
+- Added Apple Silicon sensor support from HID/SMC/IOReport/powermetrics/AGX
+  sources, including readable labels for Apple temperature channels.
+- Added macOS powermetrics helper support for CPU/GPU frequency and power values.
+- Added AGX GPU load, renderer/tiler utilization, and unified GPU memory values
+  where the system exposes them.
+- Added Linux GPU telemetry from sysfs/devfreq/DRM/i915 debugfs when available.
+- Added Linux and macOS process/task details for CPU and memory panes.
+- Added protocol fields for server model, OS version, memory pressure, GPU data,
+  disk metadata, and GPU sensor units.
+- Improved persistent TLS polling behavior for modern and classic clients.
+- Preserved existing configuration and SQLite history database behavior during
+  install/upgrade.
+
+### Version
+- Runtime server version bumped to `3.04`.
+- Runtime build bumped to `106`.
+- Autoconf package version bumped to `3.04`.
+
+### Notes
+- GPU memory sensors are now explicitly marked as byte values for newer clients.
+  Legacy clients may still interpret unknown sensor type `7` as lux if they do
+  not read the new unit hint.
+- The native replacement macOS viewer prototype is kept as a separate private
+  project and is not part of this server repository.
+
 ## v1.1.0 — 2025-10-12
 **“Modern Linux Edition”**
 

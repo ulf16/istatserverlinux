@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.istat.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/istatserverlinux/bin/istatserver</string>
+    <string>-c</string>
+    <string>/opt/istatserverlinux/etc/istatserver/istatserver.conf</string>
+  </array>
+
+  <key>UserName</key><string>istat</string>
+  <key>RunAtLoad</key><true/>
+  <key>WorkingDirectory</key><string>/opt/istatserverlinux</string>
+
+  <key>StandardOutPath</key><string>/opt/istatserverlinux/var/log/istatserver.out</string>
+  <key>StandardErrorPath</key><string>/opt/istatserverlinux/var/log/istatserver.err</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+  </dict>
+</dict></plist>

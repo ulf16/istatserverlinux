@@ -35,8 +35,8 @@
 #include <time.h>
 #include <stdio.h>
 
-#define SERVER_VERSION 3.03
-#define SERVER_BUILD 105
+#define SERVER_VERSION 3.04
+#define SERVER_BUILD 106
 #define PROTOCOL_VERSION 3
 #define HISTORY_SIZE 600
 
@@ -72,8 +72,10 @@ struct cpu_data
 #define memory_value_file 13
 #define memory_value_virtualtotal 14
 #define memory_value_virtualactive 15
+#define memory_value_compressed 16
+#define memory_value_pressure 17
 
-#define memory_values_count 16
+#define memory_values_count 18
 
 struct sample_data
 {

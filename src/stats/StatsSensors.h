@@ -92,6 +92,14 @@ class StatsSensors : public StatsBase
 		};
 		std::vector<RaplDomain> rapl_;
 
+		struct DevfreqGpu {
+			std::string dir;
+			std::string name;
+			long long last_busy = -1;
+			long long last_total = -1;
+		};
+		std::vector<DevfreqGpu> devfreqGpu_;
+
 		// Decls
 		void init_sysfs_thermal();
 		void update_sysfs_thermal(long long sampleID);

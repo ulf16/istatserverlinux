@@ -497,6 +497,76 @@ void StatsProcesses::update(long long sampleID, double totalTicks)
 	closedir(dir);
 }
 
+#elif defined(USE_PROCESSES_DARWIN)
+
+void StatsProcesses::init()
+{
+}
+
+void StatsProcesses::update(long long sampleID, double totalTicks)
+{
+	(void)totalTicks;
+
+	static double nextAllowed = 0.0;
+	double now = get_current_time();
+	if (now < nextAllowed)
+	{
+		processCount = (long)_items.size();
+		for (vector<process_info>::iterator cur = _items.begin(); cur != _items.end(); ++cur)
+			(*cur).exists = true;
+		return;
+	}
+	nextAllowed = now + 1.0;
+
+	static bool chdirFixed = false;
+	if (!chdirFixed)
+	{
+		(void)chdir("/");
+		chdirFixed = true;
+	}
+
+	FILE *fp = popen("/bin/ps -axo pid=,pcpu=,rss=,ucomm= -r", "r");
+	if (fp == NULL)
+		return;
+
+	char line[2048];
+	while (fgets(line, sizeof(line), fp))
+	{
+		int pid = 0;
+		double cpu = 0.0;
+		unsigned long rss = 0;
+		char name[1024] = {0};
+
+		if (sscanf(line, "%d %lf %lu %1023[^\n]", &pid, &cpu, &rss, name) < 4 || pid <= 0)
+			continue;
+
+		size_t nameLength = strlen(name);
+		while (nameLength > 0 && (name[nameLength - 1] == ' ' || name[nameLength - 1] == '\t' || name[nameLength - 1] == '\r' || name[nameLength - 1] == '\n'))
+			name[--nameLength] = '\0';
+
+		processProcess(pid, sampleID);
+
+		for (vector<process_info>::iterator cur = _items.begin(); cur != _items.end(); ++cur)
+		{
+			if ((*cur).pid == pid)
+			{
+				(*cur).exists = true;
+				if ((*cur).is_new == true)
+				{
+					snprintf((*cur).name, sizeof((*cur).name), "%s", name);
+					(*cur).is_new = false;
+				}
+				(*cur).cpu = cpu;
+				(*cur).memory = (unsigned long long)rss * 1024ULL;
+				(*cur).threads = 0;
+				break;
+			}
+		}
+	}
+
+	pclose(fp);
+}
+
 #else
 
 void StatsProcesses::init()
