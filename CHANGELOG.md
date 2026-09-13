@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add optional read-only SMART collection: native macOS diskutil health and
+  Linux smartctl JSON for native ATA/NVMe devices. A separate five-minute helper
+  writes an atomic cache; the network daemon never launches disk queries.
+- Map APFS snapshots/physical stores, AppleRAID members, and Linux
+  partition/device-mapper/MD dependencies. Incomplete mappings cannot pass.
+- Add versioned diskinfo health attributes with source/member details and the
+  oldest observation timestamp. Missing, stale, unsupported, sleeping, warning
+  and failed results remain distinct. No database changes or new SMART tables.
 - Fix Linux process RSS, CPU ticks and thread counts when `/proc/PID/stat`
   contains whitespace or parentheses in the process name. Reject truncated,
   malformed and overflowing readings instead of publishing shifted fields.

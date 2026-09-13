@@ -173,6 +173,7 @@ int StatsDisks::should_ignore_type(char *type)
 
 void StatsDisks::update(long long sampleID)
 {
+	smartMetadata.refresh();
 	#ifdef USE_STRUCT_MNTENT
 		struct mntent *entry;
 		FILE *table;

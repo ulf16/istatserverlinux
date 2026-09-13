@@ -76,7 +76,24 @@ Apple Silicon helper installed by this fork is used for powermetrics-derived
 frequency and power values.
 
 
-macOS Apple Silicon helper
+Optional disk health
+-------------------------
+
+Optional SMART disk health is also available through a separate five-minute
+helper. Linux uses Python 3 and smartmontools for native ATA/NVMe devices;
+Apple Silicon macOS uses Homebrew Python 3 and native diskutil. Install with:
+
+  sudo sh contrib/install-smart-helper.sh /usr/local
+
+Use /opt/istatserverlinux instead on the Mac mini installation. Results are
+cached outside the history database and expire after 15 minutes. APFS snapshots,
+RAID members and Linux partition/MD/device-mapper parents are explicitly mapped.
+Unsupported transports and incomplete mappings are never assumed healthy.
+Existing classic protocol fields and database history remain unchanged.
+See readme.md for details and run python3 tests/test-smart-helper.py plus
+make check to exercise the collector and metadata regression tests.
+
+Power and frequency helper
 --------------------------
 
 Apple's `powermetrics` tool requires elevated privileges. This fork ships a

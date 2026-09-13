@@ -30,6 +30,7 @@
  */
 
 #include "StatBase.h"
+#include "SmartMetadata.h"
 
 #ifndef _STATSDISKS_H
 #define _STATSDISKS_H
@@ -58,6 +59,7 @@ class StatsDisks : public StatsBase
 		void prepareUpdate();
 		void init();
 		std::vector<disk_info> _items;
+		istat::SmartMetadata smartMetadata;
 		void createDisk(std::string key);
 		void processDisk(char *name, char *mount, char *type);
 		int get_sizes(const char *dev, struct disk_data *data);

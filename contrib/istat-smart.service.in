@@ -1,0 +1,16 @@
+[Unit]
+Description=iStat read-only disk health snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 @PREFIX@/libexec/istat-smart-helper.py
+User=root
+RuntimeDirectory=istatserver-smart
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=180
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/istatserver-smart
+PrivateTmp=yes

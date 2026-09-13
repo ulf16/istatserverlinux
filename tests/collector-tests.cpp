@@ -1,9 +1,11 @@
 #include "stats/LinuxProcStat.h"
 #include "stats/FilesystemFilters.h"
+#include "stats/SmartMetadata.h"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <unistd.h>
 
 static void require(bool condition, const char *message)
 {
@@ -19,6 +21,28 @@ static std::string record(const std::string &name, const std::string &rss = "728
 
 int main(int argc, char **argv)
 {
+    char healthPath[] = "/tmp/istat-health-test.XXXXXX";
+    int healthFD = mkstemp(healthPath);
+    require(healthFD >= 0, "Create isolated health fixture");
+    close(healthFD);
+    {
+        std::ofstream xml(healthPath);
+        xml << "<health version='1'><volume bsd='disk3s1s1' devices='disk0' state='passed' checked='" << time(NULL) << "' detail='SSD &amp; model'/><volume bsd='sda2' state='passed' checked='1'/></health>";
+    }
+    istat::SmartMetadata metadata;
+    metadata.refresh(healthPath);
+    require(metadata.lookup("disk3s1s1").devices == "disk0" && metadata.lookup("disk3s1s1").state == "passed", "Resolve exact cached volume identity");
+    require(metadata.lookup("disk3s1s1").detail == "SSD & model", "Decode XML safely");
+    require(metadata.lookup("sda2").state == "stale", "Old health must not remain passed");
+    require(metadata.lookup("absent").state.empty(), "Missing health is not passed");
+    {
+        std::ofstream xml(healthPath);
+        xml << "<!DOCTYPE health [<!ENTITY x 'passed'>]><health version='1'><volume bsd='sda2' state='&x;'/></health>";
+    }
+    istat::SmartMetadata unsafe;
+    unsafe.refresh(healthPath);
+    require(unsafe.lookup("sda2").state.empty(), "Reject DTD-bearing health cache");
+    unlink(healthPath);
     if (argc == 2) {
         std::ifstream file(argv[1]);
         std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

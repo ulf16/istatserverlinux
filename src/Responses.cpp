@@ -676,6 +676,13 @@ string isr_diskinfo_data(int index, long sampleID, StatsDisks stats, vector<stri
 			continue;
 
 		output << "<item uuid=\"" << encodeForXml(item.uuid) << "\" key=\"" << encodeForXml(item.key) << "\" bsd=\"" << encodeForXml(bsd) << "\" name=\"" << encodeForXml(item.displayName) << "\" type=\"volume\"";
+		istat::DiskHealth health = stats.smartMetadata.lookup(item.key.compare(0, 5, "/dev/") == 0 ? item.key.substr(5) : bsd);
+		if(!health.state.empty()) {
+			output << " health_version=\"1\" health_state=\"" << encodeForXml(health.state)
+			       << "\" health_devices=\"" << encodeForXml(health.devices)
+			       << "\" health_checked=\"" << health.checked
+			       << "\" health_detail=\"" << encodeForXml(health.detail) << "\"";
+		}
 		if(physical.size() > 0)
 			output << " physical=\"" << encodeForXml(physical) << "\"";
 		if(bsd.size() > 0)

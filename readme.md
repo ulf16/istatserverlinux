@@ -77,6 +77,50 @@ macOS Apple Silicon:
 
 ## Quick Install
 
+### Optional Disk Health
+
+The new viewer can display real SMART health in its Disks pane. Install the
+helper separately after building the server:
+
+```sh
+# Linux: Python 3 and smartmontools are required.
+sudo apt-get install smartmontools
+sudo sh contrib/install-smart-helper.sh /usr/local
+
+# Apple Silicon macOS: Homebrew Python 3 and native diskutil are used.
+sudo sh contrib/install-smart-helper.sh /opt/istatserverlinux
+```
+
+The root helper runs every five minutes, outside the network daemon, and writes
+`/var/run/istatserver-smart/status.xml` atomically. Each command has a 15-second
+timeout. The server refreshes that small cache at most every 30 seconds; viewers
+request disk details at most once per minute. Observations expire after 15
+minutes. No self-tests, SMART settings changes, or raw disk permissions for the
+network daemon are involved. No database schema or history is changed.
+
+Linux supports native ATA and NVMe devices and resolves partition, MD and
+device-mapper parents. Other transports, including USB bridges, are deliberately
+not auto-probed; `smartctl` warns that transport autodetection can wake a drive.
+ATA checks request standby skipping. macOS uses the SMART status reported by
+diskutil, with explicit APFS physical-store and AppleRAID member mapping. A
+volume passes only when every mapped member reports success. Diskutil exposes
+platform-reported status, not a new surface scan or a guarantee against failure.
+
+The additive `diskinfo` fields are `health_version="1"`, `health_state`,
+`health_devices`, `health_checked` (Unix seconds), and `health_detail`. Existing
+identity-only `smart` records and classic-client fields retain their meanings.
+Unrecognized classic health encodings are not guessed by the new viewer.
+
+Run `python3 tests/test-smart-helper.py` and `make check` for helper, topology,
+cache safety/freshness and collector tests. On Linux, inspect
+`systemctl status istat-smart.timer istat-smart.service`; on macOS use
+`sudo launchctl print system/com.istat.smart.helper` (a successful periodic
+helper is normally not running between observations).
+
+Reference: [smartctl options and exit-status semantics](https://github.com/smartmontools/smartmontools/blob/main/src/smartctl.8.in).
+
+### Build and Install
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ulf16/istatserverlinux/master/get-istatserver.sh -o istatserverlinux.sh
 sh istatserverlinux.sh

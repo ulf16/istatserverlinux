@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh iStat disk health every five minutes
+
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=300
+
+[Install]
+WantedBy=timers.target

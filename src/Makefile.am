@@ -27,5 +27,5 @@ istatserver_SOURCES = \
 	./stats/StatsActivity.h ./stats/StatsActivity.cpp\
 	./stats/StatsBattery.h ./stats/StatsBattery.cpp\
 	./stats/StatsProcesses.h ./stats/StatsProcesses.cpp\
-	./stats/LinuxProcStat.h ./stats/FilesystemFilters.h\
+	./stats/LinuxProcStat.h ./stats/FilesystemFilters.h ./stats/SmartMetadata.h\
 	System.h
