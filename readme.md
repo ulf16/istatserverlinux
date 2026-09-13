@@ -54,6 +54,15 @@ Linux:
 - Intel RAPL CPU package/core/uncore power
 - GPU telemetry where exposed through sysfs, DRM, devfreq, or i915 debugfs
 
+Process memory is resident bytes (RSS pages times the runtime page size), not
+virtual address space. The procfs parser handles spaces and parentheses in
+process names. Kernel pseudo-filesystems are excluded from disk capacity
+reports without deleting their previously stored history.
+
+Run `make check` after configuring/building for collector regression tests.
+They cover field boundaries, malformed readings and filesystem filtering on
+both Linux and macOS without accessing the production database.
+
 macOS Apple Silicon:
 
 - CPU usage, task list, load, uptime, memory, swap, and memory pressure

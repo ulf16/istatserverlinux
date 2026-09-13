@@ -16,6 +16,12 @@ install-sh
 stamp-h1
 stamp-h2
 .deps
+/collector-tests
+/collector-tests.log
+/collector-tests.trs
+/test-suite.log
+/test-driver
+/compile
 .libs
 *.o
 *.lo

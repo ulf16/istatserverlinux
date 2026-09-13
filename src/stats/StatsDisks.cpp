@@ -30,6 +30,7 @@
  */
 
 #include "StatsDisks.h"
+#include "FilesystemFilters.h"
 
 #ifndef _PATH_MOUNTED
 #ifdef MNTTAB
@@ -167,69 +168,7 @@ int StatsDisks::should_ignore_mount(char *mount)
 
 int StatsDisks::should_ignore_type(char *type)
 {
-	if(!strcmp(type, "rpc_pipefs"))
-		return 1;
-	if(!strcmp(type, "rootfs"))
-		return 1;
-	if(!strcmp(type, "configfs"))
-		return 1;
-	if(!strcmp(type, "hugetlbfs"))
-		return 1;
-	if(!strcmp(type, "nfsd"))
-		return 1;
-	if(!strcmp(type, "mqueue"))
-		return 1;
-	if(!strcmp(type, "selinuxfs"))
-		return 1;
-	if(!strcmp(type, "linprocfs"))
-		return 1;
-	if(!strcmp(type, "binfmt_misc"))
-		return 1;
-	if(!strcmp(type, "tmpfs"))
-		return 1;
-	if(!strcmp(type, "devpts"))
-		return 1;
-	if(!strcmp(type, "devtmpfs"))
-		return 1;
-	if(!strcmp(type, "pstore"))
-		return 1;
-	if(!strcmp(type, "prl_fs"))
-		return 1;
-	if(!strcmp(type, "cgroup"))
-		return 1;
-	if(!strcmp(type, "iso9660"))
-		return 1;
-	if(!strcmp(type, "securityfs"))
-		return 1;
-	if(!strcmp(type, "fusectl"))
-		return 1;
-	if(!strcmp(type, "proc"))
-		return 1;
-	if(!strcmp(type, "procfs"))
-		return 1;
-	if(!strcmp(type, "debugfs"))
-		return 1;
-	if(!strcmp(type, "fuse.gvfsd-fuse"))
-		return 1;
-	if(!strcmp(type, "sysfs"))
-		return 1;
-	if(!strcmp(type, "devfs"))
-		return 1;
-	if(!strcmp(type, "autofs"))
-		return 1;
-	if(!strcmp(type, "fd"))
-		return 1;
-	if(!strcmp(type, "lofs"))
-		return 1;
-	if(!strcmp(type, "sharefs"))
-		return 1;
-	if(!strcmp(type, "objfs"))
-		return 1;
-	if(!strcmp(type, "mntfs"))
-		return 1;
-	if(!strcmp(type, "dev"))
-		return 1;
-	return 0;			
+	return istat::isIgnoredFilesystem(type) ? 1 : 0;
 }
 
 void StatsDisks::update(long long sampleID)
@@ -291,7 +230,7 @@ void StatsDisks::processDisk(char *name, char *mount, char *type)
 		}
 	}
 
-	if(!exists && (should_ignore_type(type) || should_ignore_mount(mount)))
+	if(should_ignore_type(type) || (!exists && should_ignore_mount(mount)))
 		return;
 
 	createDisk(name);

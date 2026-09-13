@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix Linux process RSS, CPU ticks and thread counts when `/proc/PID/stat`
+  contains whitespace or parentheses in the process name. Reject truncated,
+  malformed and overflowing readings instead of publishing shifted fields.
+- Preserve spaces in Linux process names and bound the display-name copy.
+- Exclude newer pseudo-filesystems (`cgroup2`, `bpf`, `tracefs`, `efivarfs`,
+  `nsfs`) from disk capacity reports. Existing database history is not deleted.
+- Add `make check` regression coverage for procfs parsing and filesystem filters.
 - Add `software="istatserverlinux"` handshake metadata so new viewers can
   distinguish the maintained implementation without relying on its platform.
 - Mark macOS memory pressure as `pressure_unit="level"` in handshake/stat

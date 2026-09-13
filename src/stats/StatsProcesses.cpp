@@ -30,6 +30,11 @@
  */
 
 #include "StatsProcesses.h"
+#ifdef USE_PROCESSES_PROCFS
+#include "LinuxProcStat.h"
+#include <fstream>
+#include <iterator>
+#endif
 
 using namespace std;
 
@@ -346,21 +351,13 @@ string StatsProcesses::nameFromStatus(int pid)
 	stringstream tmp;
 	tmp << "/proc/" << pid << "/status";
 
-	FILE * fp = NULL;
-	
-	if ((fp = fopen(tmp.str().c_str(), "r")))
-	{
-		char buf[32];
-		while (fgets(buf, sizeof(buf), fp) != NULL)
-		{
-			if(sscanf(buf, "Name:	 %s", buf) > 0)
-			{
-				fclose(fp);
-				return string(buf);
-			}
+	std::ifstream input(tmp.str().c_str());
+	std::string line;
+	while (std::getline(input, line))
+		if (line.compare(0, 5, "Name:") == 0) {
+			size_t start = line.find_first_not_of(" \t", 5);
+			return start == std::string::npos ? "" : line.substr(start);
 		}
-		fclose(fp);
-	}
 	return "";
 }
 
@@ -400,7 +397,7 @@ void StatsProcesses::update(long long sampleID, double totalTicks)
 						{
 							name = nameFromCmd(pid, name);
 						}
-						sprintf((*cur).name, "%s", name.c_str());
+						snprintf((*cur).name, sizeof((*cur).name), "%s", name.c_str());
 						(*cur).is_new = false;
 					}
 
@@ -408,25 +405,23 @@ void StatsProcesses::update(long long sampleID, double totalTicks)
 						stringstream tmp;
 						tmp << "/proc/" << pid << "/stat";
 
-						FILE * fp = NULL;
-	
-						if ((fp = fopen(tmp.str().c_str(), "r")))
+						std::ifstream input(tmp.str().c_str());
+						if (input)
 						{
-							unsigned long userTime = 0;
-							unsigned long systemTime = 0;
-							unsigned long rss = 0;
-							long threads = 0;
-							char name[255];
-
-							if(fscanf(fp, "%*d %s %*c %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu %*s %*s %*s %*s %ld %*s %*s %*s %lu", name, &userTime, &systemTime, &threads, &rss) > 0)
+							std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+							istat::LinuxProcStat stat;
+							unsigned long long memory = 0;
+							if(!input.bad() && istat::parseLinuxProcStat(text, stat) && istat::residentBytes(stat, getpagesize(), memory))
 							{
+								double totalTime = (double)stat.userTicks + (double)stat.systemTicks;
 								if((*cur).cpuTime == 0)
 								{
-									(*cur).cpuTime = (double)(userTime + systemTime);
+									(*cur).cpuTime = totalTime;
 									(*cur).lastClockTime = get_current_time();
 								}
 
-								double cpuTime = (double)(userTime + (double)systemTime) - (*cur).cpuTime;
+								double cpuTime = totalTime - (*cur).cpuTime;
+								if (cpuTime < 0) cpuTime = 0;
 								double clockTimeDifference = get_current_time() - (*cur).lastClockTime;
 
 								if(clockTimeDifference > 0)
@@ -441,14 +436,17 @@ void StatsProcesses::update(long long sampleID, double totalTicks)
 									(*cur).cpu = 0;
 								}
 
-								threadCount += threads;
-								(*cur).threads = threads;
-								(*cur).memory = rss * getpagesize();
-								(*cur).cpuTime = (double)(userTime + systemTime);
+								threadCount += stat.threads;
+								(*cur).threads = stat.threads;
+								(*cur).memory = memory;
+								(*cur).cpuTime = totalTime;
 								(*cur).lastClockTime = get_current_time();
 							}
-							fclose(fp);
+							else
+								(*cur).exists = false;
 						}
+						else
+							(*cur).exists = false;
 					}
 					
 					// /proc/pid/io requires root access which we usually dont run with

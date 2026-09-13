@@ -35,6 +35,11 @@ Linux:
 - Intel RAPL CPU package/core/uncore power
 - GPU telemetry where exposed through sysfs, DRM, devfreq, or i915 debugfs
 
+Process memory is resident bytes (RSS pages times the runtime page size), not
+virtual address space. The procfs parser handles spaces and parentheses in
+process names. Disk capacity reports exclude kernel pseudo-filesystems;
+filtering does not remove their previously stored history.
+
 macOS Apple Silicon:
 
 - CPU usage, task list, load, uptime, memory, swap, and memory pressure
@@ -50,6 +55,10 @@ macOS Apple Silicon:
 
 Requirements
 ------------
+
+Collector regression tests: run `make check` after configuring/building. These
+cover procfs field boundaries, invalid readings and filesystem filtering, and
+can run on both Linux and macOS without opening the production database.
 
 - C and C++ compilers such as gcc, g++, or clang
 - Autoconf, automake, libtool, and pkg-config/pkgconf
