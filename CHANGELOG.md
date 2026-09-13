@@ -1,5 +1,13 @@
 # iStat Server for Linux – Changelog
 
+## Unreleased
+
+- Add `software="istatserverlinux"` handshake metadata so new viewers can
+  distinguish the maintained implementation without relying on its platform.
+- Mark macOS memory pressure as `pressure_unit="level"` in handshake/stat
+  metadata. The existing sysctl value is a kernel pressure level, not a percent.
+  These optional XML attributes do not change stored history or the DB schema.
+
 ## v1.2.0 — 2026-06-02
 **“Apple Silicon and Full Telemetry Edition”**
 

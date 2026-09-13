@@ -224,6 +224,10 @@ string isr_serverinfo(int session, int auth, string uuid, bool historyEnabled)
 	if(model.size() > 0)
 		temp << " model=\"" << encodeForXml(model) << "\"";
 	temp << " platform=\"" << serverPlatform() << "\" session=\"" << session << "\" uuid=\"" << uuid << "\"";
+	temp << " software=\"istatserverlinux\"";
+#if defined(__APPLE__)
+	temp << " pressure_unit=\"level\"";
+#endif
 	if(os.size() > 0)
 		temp << " os=\"" << encodeForXml(os) << "\"";
 	temp << " auth=\"" << auth << "\"></isr>";
@@ -318,6 +322,9 @@ string isr_memory_data(xmlNodePtr node, Stats *stats)
 		output << "<stat type=\"memory\" interval=\"" << x << "\" session=\"" << stats->memoryStats.session << "\" id=\"" << stats->memoryStats.sampleIndex[x].sampleID << "\" samples=\"" << samples.size() << "\"";
 		if(pressure >= 0)
 			output << " pressure=\"" << pressure << "\"";
+#if defined(__APPLE__)
+		output << " pressure_unit=\"level\"";
+#endif
 		output << ">";
 		for(size_t i = 0;i < samples.size(); i++)
 		{
