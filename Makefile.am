@@ -6,6 +6,10 @@ collector_tests_SOURCES = tests/collector-tests.cpp
 collector_tests_CPPFLAGS = -I$(srcdir)/src
 
 EXTRA_DIST = README COPYING autogen \
+	contrib/istat-server-status.py tests/test-server-status.py \
+	control-macos/GNUmakefile control-macos/Info.plist control-macos/README.md \
+	control-macos/src/main.m control-macos/src/ISCReport.h control-macos/src/ISCReport.m \
+	control-macos/tests/ISCReportTests.m \
 	contrib/istat-smart-helper.py contrib/install-smart-helper.sh \
 	contrib/istat-smart.service.in contrib/istat-smart.timer \
 	contrib/com.istat.smart.helper.plist.in tests/test-smart-helper.py \

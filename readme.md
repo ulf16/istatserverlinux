@@ -77,6 +77,33 @@ macOS Apple Silicon:
 
 ## Quick Install
 
+### Native Server Control (Preview)
+
+`control-macos` contains a separate native, read-only status app for the
+maintained server. It shows installation/service identity, file settings where
+readable, observed listening ports, helper status and health-cache freshness.
+It detects the classic Mac server separately and never manages it.
+
+```sh
+make -C control-macos
+open control-macos/build/iStatServerControl.app
+```
+
+The same Python 3 inventory works on Linux and macOS:
+
+```sh
+python3 contrib/istat-server-status.py
+python3 contrib/istat-server-status.py --prefix /usr/local
+```
+
+No credentials, raw configuration, logs or history are included in its JSON
+reports. File > Open Status Report can display a separately obtained report as
+a saved snapshot, not a live connection. Protected settings remain explicitly
+unavailable without permission; the app never invokes sudo. Settings editing,
+credential reveal and service control require a future authorized backend.
+See [control-macos/README.md](control-macos/README.md) for build requirements,
+commands, report contents and current limitations.
+
 ### Optional Disk Health
 
 The new viewer can display real SMART health in its Disks pane. Install the

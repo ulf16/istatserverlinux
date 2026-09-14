@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add the first native Server Control preview: read-only local inventory,
+  classic/maintained-server distinction, helper/cache status, native menus and
+  validated status-report import/export. Share a versioned, credential-free
+  Python status collector with Linux. No server binary execution, privilege
+  changes, service restarts, configuration writes or database access.
 - Tighten SMART disk-sleep safeguards: Linux ATA checks skip unsupported or
   unknown power states as well as standby/sleep, with no unguarded fallback.
   macOS discovers topology from cached IORegistry properties and restricts

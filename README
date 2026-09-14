@@ -76,6 +76,21 @@ Apple Silicon helper installed by this fork is used for powermetrics-derived
 frequency and power values.
 
 
+Native server control preview
+-------------------------
+
+The control-macos directory contains a separate read-only native status window
+for the maintained server. Build with make -C control-macos. It includes native
+menus, refresh and status-report import/export; saved reports are not live
+remote connections. The classic Mac server is detected separately, never managed.
+The shared Python 3 collector also runs on Linux:
+
+  python3 contrib/istat-server-status.py
+
+No sudo, service changes, credentials in reports, or database access is involved.
+Protected configuration remains permission-denied instead of guessed. See
+control-macos/README.md for requirements and the pending administration backend.
+
 Optional disk health
 -------------------------
 
