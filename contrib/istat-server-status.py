@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import shutil
 import socket
@@ -163,6 +164,34 @@ def health_cache(path, now):
     return result
 
 
+def legacy_server(system, run=command, root=Path('/')):
+    binary = '/Library/Application Support/iStat Server/iStatServerDaemon'
+    label = 'com.bjango.istatserverdaemon'
+    result = {'installed': False, 'app_present': False, 'app_version': None,
+              'binary': binary, 'label': label, 'state': 'not-applicable',
+              'identity': 'unverified', 'pid': None, 'last_exit': None,
+              'listeners': {'state': 'not-observed', 'ports': []}}
+    if system != 'Darwin':
+        return result
+    actual = lambda path: root / str(path).lstrip('/')
+    result['installed'] = actual(binary).is_file()
+    result.update(service(system, label, binary, run))
+    if not result['installed'] and result['state'] == 'unavailable':
+        result['state'] = 'not-installed'
+    if result['identity'] == 'matched' and result['pid']:
+        result['listeners'] = listeners(result['pid'], run)
+    try:
+        info = plistlib.loads(read_small(actual('/Applications/iStat Server.app/Contents/Info.plist')))
+        if isinstance(info, dict) and info.get('CFBundleIdentifier') == 'com.bjango.iStatServer':
+            result['app_present'] = actual('/Applications/iStat Server.app/Contents/MacOS/iStat Server').is_file()
+            version = info.get('CFBundleShortVersionString', '')
+            if isinstance(version, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,3}', version):
+                result['app_version'] = version
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        pass
+    return result
+
+
 def inventory(prefix=None, system=None, run=command, root=Path('/'), now=None):
     system = system or platform.system()
     now = int(time.time()) if now is None else now
@@ -177,6 +206,7 @@ def inventory(prefix=None, system=None, run=command, root=Path('/'), now=None):
         main['state'] = 'not-installed'
     helper_labels = (['com.istat.smart.helper', 'com.istat.powermetrics.helper'] if system == 'Darwin'
                      else ['istat-smart.service', 'istat-smart.timer'])
+    legacy = legacy_server(system, run, root)
     return {
         'schema': 1, 'mode': 'read-only', 'checked': now,
         'host': socket.gethostname(), 'platform': system,
@@ -184,8 +214,8 @@ def inventory(prefix=None, system=None, run=command, root=Path('/'), now=None):
                          'credential_read': False, 'logs': False},
         'installation': {'prefix': str(prefix), 'binary': str(binary), 'configuration': str(config),
                          'installed': installed, 'version': None,
-                         'classic_present': system == 'Darwin' and
-                         actual('/Library/Application Support/iStat Server/iStatServerDaemon').is_file()},
+                         'classic_present': legacy['installed']},
+        'legacy': legacy,
         'service': main,
         'configuration': configuration(actual(config)),
         'listeners': listeners(main['pid'], run) if main['identity'] == 'matched' else {'state': 'not-observed', 'ports': []},

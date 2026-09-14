@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Polish Server Control with a charcoal/cyan dashboard, separate Modern/Classic
+  views and scrollable native detail tabs. Detect the classic macOS daemon's
+  runtime state using launchd plus executable identity, and offer local-only
+  access to its original settings app. Keep older status reports compatible;
+  unknown legacy fields are stripped and saved reports cannot launch local apps.
 - Add the first native Server Control preview: read-only local inventory,
   classic/maintained-server distinction, helper/cache status, native menus and
   validated status-report import/export. Share a versioned, credential-free

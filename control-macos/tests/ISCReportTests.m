@@ -20,6 +20,17 @@ int main(void) {
     @autoreleasepool {
         NSMutableDictionary *raw = fixture();
         check(ISCReadReport(encode(raw)) != nil, @"Accept version-one report");
+        check([ISCReadReport(encode(raw))[@"legacy"][@"state"] isEqual:@"not-observed"], @"Old reports must not infer a running classic daemon");
+        NSMutableDictionary *legacyFixture = fixture();
+        legacyFixture[@"legacy"] = @{@"state": @"running", @"identity": @"matched", @"label": @"com.bjango.istatserverdaemon",
+                                      @"binary": @"/Library/Application Support/iStat Server/iStatServerDaemon", @"installed": @YES,
+                                      @"app_present": @YES, @"app_version": @"3.03", @"pid": @812, @"last_exit": NSNull.null,
+                                      @"listeners": @{@"state": @"observed", @"ports": @[@5109]}, @"password": @"secret-legacy-field"};
+        NSDictionary *legacy = ISCReadReport(encode(legacyFixture))[@"legacy"];
+        check([legacy[@"state"] isEqual:@"running"] && [legacy[@"pid"] isEqual:@812], @"Preserve observed legacy runtime identity");
+        check(legacy[@"password"] == nil, @"Do not re-export unrecognized legacy credentials");
+        legacyFixture[@"legacy"] = @[];
+        check(ISCReadReport(encode(legacyFixture)) == nil, @"Reject malformed legacy section");
         raw[@"private_password"] = @"never-reexport";
         NSMutableDictionary *config = [raw[@"configuration"] mutableCopy];
         config[@"server_code"] = @"never-reexport"; raw[@"configuration"] = config;

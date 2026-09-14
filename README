@@ -83,6 +83,10 @@ The control-macos directory contains a separate read-only native status window
 for the maintained server. Build with make -C control-macos. It includes native
 menus, refresh and status-report import/export; saved reports are not live
 remote connections. The classic Mac server is detected separately, never managed.
+The charcoal/cyan dashboard separates Modern/Classic installations and offers
+Overview, Connection and Diagnostics tabs. Classic running-state detection
+verifies launchd's executable path; its original settings app can be opened
+locally, but never through an imported report.
 The shared Python 3 collector also runs on Linux:
 
   python3 contrib/istat-server-status.py

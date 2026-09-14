@@ -83,6 +83,11 @@ macOS Apple Silicon:
 maintained server. It shows installation/service identity, file settings where
 readable, observed listening ports, helper status and health-cache freshness.
 It detects the classic Mac server separately and never manages it.
+The charcoal/cyan dashboard has Modern/Classic views and compact Overview,
+Connection and Diagnostics tabs. Classic runtime detection verifies launchd's
+executable path rather than assuming an installed app is running. A local
+Open Classic Server action opens the original settings app; saved reports
+cannot invoke it. Older status reports remain supported.
 
 ```sh
 make -C control-macos

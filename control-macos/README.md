@@ -4,6 +4,15 @@ First milestone: a separate native, read-only installation/status window for
 the maintained iStat server. The classic Bjango daemon is detected separately
 and is never managed. Closing this app does not stop any server.
 
+The dashboard uses a charcoal/cyan status header with separate Modern Server
+and Classic Server views, plus Overview, Connection and Diagnostics tabs.
+Details scroll independently of the header and footer when the window is small.
+On macOS, classic runtime detection checks launchd and its exact daemon path;
+an installed file alone never means Running. The public settings-app version
+is shown separately from the daemon. Open Classic Server opens the original
+local settings app, without reading or changing its configuration. This action
+is disabled when viewing saved reports.
+
 Build on macOS with Xcode command-line tools and Python 3 installed:
 
 ```sh
@@ -27,6 +36,8 @@ service identity/state, observed process-owned TCP listening ports, helper
 states and health-cache freshness. It contains no passcode, password, TLS key,
 configuration contents, command output, logs, client lists or history samples.
 It does contain hostname and local paths; review before sharing publicly.
+The optional `legacy` section adds classic installation/runtime observations.
+Older schema-1 reports without it remain readable and show Not observed.
 
 Use File > Choose Installation to inspect a non-default local prefix. Use
 File > Export Status Report to save a report, or File > Open Status Report to
@@ -46,7 +57,8 @@ and Command-Q quits without altering services.
   from `lsof` for that service PID; permission/tool failures remain Not observed.
 - A missing or inaccessible configuration is explicit. Unknown keys and invalid
   values are never echoed, including in errors. No server binary is executed to
-  obtain its version. Version and Bonjour publication are not yet observed.
+  obtain its version. Maintained-daemon version and Bonjour publication are
+  not yet observed. The classic version comes only from its public app plist.
 - A protected configuration is Permission denied, not a reason to loosen file
   permissions. Authorized settings access is a later backend milestone.
 - The helper's Idle state between scheduled runs is normal. Last exit and

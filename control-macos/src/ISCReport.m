@@ -39,6 +39,14 @@ static NSDictionary *ISCSection(id value, NSArray *strings, NSArray *numbers, NS
     return out;
 }
 
+static NSDictionary *ISCListeners(id listeners) {
+    if (![listeners isKindOfClass:NSDictionary.class] || !ISCString(listeners[@"state"]) ||
+        ![listeners[@"ports"] isKindOfClass:NSArray.class] || [listeners[@"ports"] count] > 64) return nil;
+    for (id port in listeners[@"ports"])
+        if (!ISCInteger(port, 1, 65535, NO)) return nil;
+    return @{@"state": listeners[@"state"], @"ports": listeners[@"ports"]};
+}
+
 NSDictionary *ISCReadReport(NSData *data) {
     if (!data || data.length > 65536) return nil;
     id raw = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -57,12 +65,22 @@ NSDictionary *ISCReadReport(NSData *data) {
         !ISCInteger(health[@"skipped"], 0, [health[@"devices"] doubleValue], NO)) return nil;
     out[@"installation"] = installation; out[@"configuration"] = config;
     out[@"service"] = service; out[@"health"] = health;
-    id listeners = raw[@"listeners"];
-    if (![listeners isKindOfClass:NSDictionary.class] || !ISCString(listeners[@"state"]) ||
-        ![listeners[@"ports"] isKindOfClass:NSArray.class] || [listeners[@"ports"] count] > 64) return nil;
-    for (id port in listeners[@"ports"])
-        if (!ISCInteger(port, 1, 65535, NO)) return nil;
-    out[@"listeners"] = @{@"state": listeners[@"state"], @"ports": listeners[@"ports"]};
+    NSDictionary *listeners = ISCListeners(raw[@"listeners"]);
+    if (!listeners) return nil;
+    out[@"listeners"] = listeners;
+    if (raw[@"legacy"]) {
+        NSMutableDictionary *legacy = [ISCSection(raw[@"legacy"], @[@"state", @"identity", @"label", @"binary"], @[@"installed", @"app_present"], @[@"pid", @"last_exit"], @[@"app_version"]) mutableCopy];
+        NSDictionary *legacyListeners = [raw[@"legacy"] isKindOfClass:NSDictionary.class] ? ISCListeners(raw[@"legacy"][@"listeners"]) : nil;
+        if (!legacy || !legacyListeners || !ISCProcessNumbers(legacy)) return nil;
+        legacy[@"listeners"] = legacyListeners;
+        out[@"legacy"] = legacy;
+    } else {
+        // Older snapshots only knew whether a daemon file existed, not whether it ran.
+        out[@"legacy"] = @{@"installed": installation[@"classic_present"], @"app_present": @NO,
+                           @"app_version": NSNull.null, @"pid": NSNull.null, @"last_exit": NSNull.null,
+                           @"binary": @"", @"label": @"", @"identity": @"unverified", @"state": @"not-observed",
+                           @"listeners": @{@"state": @"not-observed", @"ports": @[]}};
+    }
     if (![raw[@"helpers"] isKindOfClass:NSArray.class] || [raw[@"helpers"] count] > 8) return nil;
     NSMutableArray *helpers = [NSMutableArray array];
     for (id value in raw[@"helpers"]) {

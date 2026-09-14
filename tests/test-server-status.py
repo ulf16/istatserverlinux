@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -100,7 +101,9 @@ class StatusTests(unittest.TestCase):
                     report = status.inventory(system=system, root=root, run=run, now=1000)
                 self.assertTrue(report['installation']['installed'])
                 self.assertNotIn('never-export-secret', json.dumps(report))
-                self.assertTrue(all(Path(call.args[0]).name in ('istatserver.conf', 'status.xml') for call in reader.call_args_list))
+                permitted = {config / 'istatserver.conf', root / 'var/run/istatserver-smart/status.xml'}
+                if system == 'Darwin': permitted.add(root / 'Applications/iStat Server.app/Contents/Info.plist')
+                self.assertTrue(all(Path(call.args[0]) in permitted for call in reader.call_args_list))
                 self.assertTrue(all(call.args[0][0] in ('/bin/launchctl', '/usr/bin/systemctl') for call in run.call_args_list))
                 self.assertEqual(before, {p: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes()) for p in config.iterdir()})
                 self.assertFalse(report['capabilities']['settings_write'])
@@ -111,6 +114,42 @@ class StatusTests(unittest.TestCase):
             self.assertIsNone(status.command(['fixed-command']))
         with patch.object(status.subprocess, 'run', side_effect=subprocess.TimeoutExpired('fixed-command', 3)):
             self.assertIsNone(status.command(['fixed-command']))
+
+    def test_legacy_running_is_not_just_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'Library/Application Support/iStat Server/iStatServerDaemon'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('Never executed')
+            run = Mock(return_value=None)
+            record = status.legacy_server('Darwin', run, root)
+            self.assertTrue(record['installed'])
+            self.assertEqual(record['state'], 'unavailable')
+            self.assertIsNone(record['pid'])
+            output = '\tstate = running\n\tprogram = /Library/Application Support/iStat Server/iStatServerDaemon\n\tpid = 812\n'
+            run.side_effect = lambda argv: output if argv[0] == '/bin/launchctl' else None
+            record = status.legacy_server('Darwin', run, root)
+            self.assertEqual((record['state'], record['pid'], record['identity']), ('running', 812, 'matched'))
+            self.assertEqual(record['listeners']['state'], 'not-observed')
+            output = output.replace('state = running', 'state = not running').replace('\tpid = 812\n', '')
+            record = status.legacy_server('Darwin', run, root)
+            self.assertEqual(record['state'], 'idle')
+            self.assertIsNone(record['pid'])
+            output = output.replace('/Library/Application Support/iStat Server/iStatServerDaemon', '/tmp/iStatServerDaemon')
+            record = status.legacy_server('Darwin', run, root)
+            self.assertEqual(record['state'], 'identity-mismatch')
+            self.assertIsNone(record['pid'])
+
+    def test_legacy_linux_and_app_identity(self):
+        run = Mock(return_value=None)
+        self.assertEqual(status.legacy_server('Linux', run)['state'], 'not-applicable')
+        run.assert_not_called()
+        for info, expected in [({'CFBundleIdentifier': 'com.bjango.iStatServer', 'CFBundleShortVersionString': '3.03'}, '3.03'),
+                               ({'CFBundleIdentifier': 'other.app', 'CFBundleShortVersionString': '3.03'}, None),
+                               ({'CFBundleIdentifier': 'com.bjango.iStatServer', 'CFBundleShortVersionString': 'private-value'}, None),
+                               ([], None)]:
+            with patch.object(status, 'read_small', return_value=plistlib.dumps(info)):
+                self.assertEqual(status.legacy_server('Darwin', run)['app_version'], expected)
 
 
 if __name__ == '__main__': unittest.main()
