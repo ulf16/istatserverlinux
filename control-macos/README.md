@@ -126,6 +126,14 @@ it is a configured secret. Unknown/malformed input is never echoed in errors.
 
 Protected replies never enter the status report, exports or preferences. Reveal
 is hidden after 30 seconds, on deactivation, navigation, window close or quit.
+Build 5 preserves already-read non-secret metadata across focus changes, including
+the macOS authorization dialog. If an approved Reveal/Copy reply arrives before
+the app regains focus, it waits in memory for up to 30 seconds, then is discarded.
+Delivery requires the original connection pane and a visible, active key window;
+it happens only once, without another read or authorization prompt. Navigation,
+refresh, window close and quit clear pending delivery and settings metadata.
+The helper status distinguishes Ready, an in-progress request, pending delivery,
+and Settings read successfully; helper approval is not a lasting authorization.
 Copy marks the clipboard concealed/transient and clears it after 30 seconds or
 normal quit, only if the clipboard has not subsequently changed. Clipboard
 managers may ignore these markers and force-quit cannot run cleanup: copying is
@@ -168,6 +176,9 @@ For signed, bidirectional XPC tests (including wrong identity/team rejection),
 run `make -C control-macos test-signed SIGN_IDENTITY="<signing identity>"`.
 These tests use an anonymous local listener and no administrator authorization,
 server configuration or credentials. Run outside a restrictive process sandbox.
+Headless delegate tests use synthetic credentials and a stub client to cover
+authorization focus handoff, one-shot reveal, cancellation, expiry, navigation
+and late replies, without touching the clipboard or any real server settings.
 The OS authorization test runs from a disposable `/private/tmp` directory because
 authd may be unable to inspect test executables inside a Documents checkout.
 Credential-free protected reads were verified on both minis via their existing

@@ -3,6 +3,7 @@
 #import "ISCSettingsClient.h"
 #import "ISCSettingsProtocol.h"
 #import "ISCHelperRegistration.h"
+#import "ISCProtectedSettingsState.h"
 #import <ServiceManagement/ServiceManagement.h>
 
 @interface ISCFlippedView : NSView
@@ -42,7 +43,8 @@
 @property NSString *prefix;
 @property BOOL busy;
 @property BOOL snapshot;
-@property NSDictionary *protectedSettings;
+@property ISCProtectedSettingsState *protectedState;
+@property NSTimer *credentialDeliveryTimer;
 @property ISCSettingsClient *settingsClient;
 @property NSAlert *credentialSheet;
 @property NSTextField *credentialField;
@@ -339,11 +341,11 @@
             [self row:@"File" value:i[@"configuration"]];
             [self section:@"Protected settings"];
             [self row:@"Read-only helper" value:[self protectedAccessStatus]];
-            if (self.protectedSettings && !self.snapshot) {
-                [self row:@"Configured port" value:[self.protectedSettings[@"port"] stringValue]];
-                [self row:@"Configured address" value:self.protectedSettings[@"address"]];
-                [self row:@"Authentication mode" value:[self state:self.protectedSettings[@"auth_mode"]]];
-                [self row:@"Credential source" value:[self state:self.protectedSettings[@"credential_source"]]];
+            if (self.protectedState.metadata && !self.snapshot) {
+                [self row:@"Configured port" value:[self.protectedState.metadata[@"port"] stringValue]];
+                [self row:@"Configured address" value:self.protectedState.metadata[@"address"]];
+                [self row:@"Authentication mode" value:[self state:self.protectedState.metadata[@"auth_mode"]]];
+                [self row:@"Credential source" value:[self state:self.protectedState.metadata[@"credential_source"]]];
                 [self row:@"Pairing credential" value:@"Hidden"];
             }
             NSButton *enable = [NSButton buttonWithTitle:@"Enable Protected Access..." target:self action:@selector(enableProtected:)];
@@ -537,7 +539,10 @@
         if (![self canRegisterHelper]) return @"Install signed app in /Applications";
         if (self.helperRegistration == ISCHelperRegistrationWaiting) return @"Waiting for approval in System Settings";
         switch ([SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status) {
-            case SMAppServiceStatusEnabled: return self.settingsClient ? @"Authorizing..." : @"Ready; authorization required";
+            case SMAppServiceStatusEnabled:
+                if (self.settingsClient) return @"Awaiting authorization / reading...";
+                if ([self.protectedState hasPendingCredentialAtTime:NSProcessInfo.processInfo.systemUptime]) return @"Authorized; waiting for this window";
+                return self.protectedState.metadata ? @"Settings read successfully" : @"Ready";
             case SMAppServiceStatusRequiresApproval: return @"Approval needed in System Settings";
             default: return @"Not enabled";
         }
@@ -636,9 +641,17 @@
         [self render];
     }];
 }
+- (ISCSettingsClient *)makeSettingsClient { return [ISCSettingsClient new]; }
+- (BOOL)protectedWindowIsForeground {
+    return NSApp.active && self.window.visible && self.window.keyWindow && !self.window.attachedSheet;
+}
 - (void)requestProtected:(NSInteger)action {
     if (![self canReadProtected]) return;
-    ISCSettingsClient *client = [ISCSettingsClient new];
+    if (!self.protectedState) self.protectedState = [ISCProtectedSettingsState new];
+    [self.protectedState beginRequest];
+    [self.credentialDeliveryTimer invalidate]; self.credentialDeliveryTimer = nil;
+    [self hideCredential];
+    ISCSettingsClient *client = [self makeSettingsClient];
     self.settingsClient = client;
     [self render];
     __weak ISCApp *weak = self;
@@ -647,26 +660,51 @@
         if (app.settingsClient != client) return;
         app.settingsClient = nil;
         if (error) { [app render]; [app failure:error]; return; }
-        if (!result || app.snapshot || !NSApp.active || !app.window.visible) { [app render]; return; }
-        // Secrets never enter the ordinary report or the settings metadata.
-        app.protectedSettings = [result dictionaryWithValuesForKeys:@[@"port", @"address", @"auth_mode", @"credential_source"]];
+        if (!result || app.snapshot || !app.window.visible) { [app render]; return; }
+        // Authorization can finish before AppKit restores focus. Retain only a
+        // short-lived, one-shot delivery; never repeat the authorized read.
+        [app.protectedState receiveResult:result action:action atTime:NSProcessInfo.processInfo.systemUptime];
         [app render];
-        if (action == 1) [app showCredential:result[@"credential"]];
-        if (action == 2) {
-            NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
-            [pasteboard clearContents];
-            [pasteboard setString:result[@"credential"] forType:NSPasteboardTypeString];
-            // Mark as transient/concealed for clipboard managers which honor it.
-            [pasteboard setData:[NSData data] forType:@"org.nspasteboard.ConcealedType"];
-            [pasteboard setData:[NSData data] forType:@"org.nspasteboard.TransientType"];
-            NSInteger count = pasteboard.changeCount;
-            app.credentialClipboardChange = count;
-            app.timestamp.stringValue = @"Credential copied; clipboard clears in 30 seconds";
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                if (pasteboard.changeCount == count) [pasteboard clearContents];
-            });
+        [app deliverProtectedCredential];
+        if ([app.protectedState hasPendingCredentialAtTime:NSProcessInfo.processInfo.systemUptime]) {
+            app.credentialDeliveryTimer = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
+                [weak deliverProtectedCredential];
+            }];
+            [NSRunLoop.mainRunLoop addTimer:app.credentialDeliveryTimer forMode:NSRunLoopCommonModes];
         }
     }];
+}
+- (void)deliverProtectedCredential {
+    BOOL pending = [self.protectedState hasPendingCredentialAtTime:NSProcessInfo.processInfo.systemUptime];
+    if (!pending) {
+        BOOL expired = self.credentialDeliveryTimer != nil;
+        [self.credentialDeliveryTimer invalidate]; self.credentialDeliveryTimer = nil;
+        if (expired) [self render];
+        return;
+    }
+    if (![self protectedWindowIsForeground]) return;
+    if (self.snapshot || self.edition.selectedSegment != 0 || self.tabs.selectedSegment != 1) {
+        [self clearProtected]; return;
+    }
+    NSDictionary *result = [self.protectedState takePendingCredentialAtTime:NSProcessInfo.processInfo.systemUptime];
+    [self.credentialDeliveryTimer invalidate]; self.credentialDeliveryTimer = nil;
+    [self render];
+    NSInteger action = [result[@"action"] integerValue];
+    if (action == 1) [self showCredential:result[@"credential"]];
+    if (action == 2) {
+        NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+        [pasteboard clearContents];
+        [pasteboard setString:result[@"credential"] forType:NSPasteboardTypeString];
+        // Mark as transient/concealed for clipboard managers which honor it.
+        [pasteboard setData:[NSData data] forType:@"org.nspasteboard.ConcealedType"];
+        [pasteboard setData:[NSData data] forType:@"org.nspasteboard.TransientType"];
+        NSInteger count = pasteboard.changeCount;
+        self.credentialClipboardChange = count;
+        self.timestamp.stringValue = @"Credential copied; clipboard clears in 30 seconds";
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            if (pasteboard.changeCount == count) [pasteboard clearContents];
+        });
+    }
 }
 - (void)readProtected:(id)sender { [self requestProtected:0]; }
 - (void)revealProtected:(id)sender { [self requestProtected:1]; }
@@ -701,14 +739,14 @@
     ISCSettingsClient *client = self.settingsClient;
     self.settingsClient = nil;
     [client cancel];
-    self.protectedSettings = nil;
+    [self.protectedState clear];
+    [self.credentialDeliveryTimer invalidate]; self.credentialDeliveryTimer = nil;
     [self hideCredential];
 }
 - (void)lockProtected:(NSNotification *)note {
-    self.protectedSettings = nil;
     [self hideCredential];
-    // The OS authorization dialog itself can deactivate the app. Do not cancel
-    // that deliberate request or automatically retry it.
+    // Focus loss hides the displayed secret, not previously read non-secret
+    // metadata. The OS authorization dialog itself can cause this notification.
     if (!self.settingsClient) [self render];
 }
 - (void)windowWillClose:(NSNotification *)note { [self clearProtected]; }
@@ -717,6 +755,7 @@
     // controls; never start another authorization request automatically.
     [self refreshHelperApproval];
     [self render];
+    [self deliverProtectedCredential];
 }
 - (void)applicationWillTerminate:(NSNotification *)note {
     [self.approvalTimer invalidate];
@@ -737,6 +776,7 @@
 }
 @end
 
+#ifndef ISC_APP_TESTING
 int main(int argc, const char **argv) {
     @autoreleasepool {
         NSApplication *app = NSApplication.sharedApplication;
@@ -747,3 +787,4 @@ int main(int argc, const char **argv) {
     }
     return 0;
 }
+#endif

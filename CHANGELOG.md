@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix Server Control 0.2 build 5 losing approved Reveal/Copy results during
+  macOS authorization focus changes. Deliver once when the original window is
+  foreground again, with bounded expiry and navigation/close cancellation.
+  Preserve non-secret settings metadata across focus changes and report successful
+  reads accurately, without retaining authorization or exporting credentials.
 - Fix Server Control 0.2 build 4 crashing after protected-access authorization:
   compile valid peer-signature requirements and fail closed on XPC setup errors.
   Treat pending macOS helper approval as waiting, observe completion without

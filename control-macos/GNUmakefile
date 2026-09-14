@@ -39,6 +39,8 @@ test:
 	build/ISCSettingsTrustTests
 	clang $(FLAGS) -framework Foundation -framework ServiceManagement -Isrc tests/ISCHelperRegistrationTests.m src/ISCHelperRegistration.m -o build/ISCHelperRegistrationTests
 	build/ISCHelperRegistrationTests
+	clang $(FLAGS) -framework Cocoa -framework Security -framework ServiceManagement -Isrc tests/ISCProtectedSettingsTests.m $(filter-out src/main.m,$(SOURCES)) -o build/ISCProtectedSettingsTests
+	build/ISCProtectedSettingsTests
 	clang++ -x objective-c++ -std=c++11 -fobjc-arc -Wall -Wextra -DISC_HELPER_TESTING -mmacosx-version-min=13.0 -framework Foundation -framework Security -Isrc -I../contrib/settings tests/ISCSettingsHelperTests.mm helper/main.mm src/ISCSettingsTrust.m $(CORE) -o build/ISCSettingsHelperTests
 	sh tests/run-helper-tests.sh
 
