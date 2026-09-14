@@ -9,12 +9,16 @@ CORE := ../contrib/settings/Settings.cpp
 .PHONY: all test
 all: $(APP)/Contents/MacOS/iStatServerControl
 
-$(APP)/Contents/MacOS/iStatServerControl: $(SOURCES) $(wildcard src/*.h) Info.plist ../contrib/istat-server-status.py README.md $(HELPER)
+$(APP)/Contents/MacOS/iStatServerControl: $(SOURCES) $(wildcard src/*.h) Info.plist ../contrib/istat-server-status.py README.md $(HELPER) build/AppIcon.icns
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp Info.plist $(APP)/Contents/Info.plist
 	cp ../contrib/istat-server-status.py README.md $(APP)/Contents/Resources/
+	cp build/AppIcon.icns $(APP)/Contents/Resources/
 	clang $(FLAGS) -framework Cocoa -framework Security -framework ServiceManagement $(SOURCES) -o $@
 	codesign --force --options runtime $(SIGN_TIMESTAMP) --sign "$(SIGN_IDENTITY)" $(APP)
+
+build/AppIcon.icns: assets/AppIcon.png assets/build-icon.sh
+	sh assets/build-icon.sh
 
 $(HELPER): helper/main.mm src/ISCSettingsProtocol.h src/ISCSettingsTrust.m $(CORE) ../contrib/settings/Settings.hpp helper/org.istatserver.control.settings.plist
 	mkdir -p $(dir $(HELPER)) $(APP)/Contents/Library/LaunchDaemons

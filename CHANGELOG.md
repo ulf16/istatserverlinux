@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Give Server Control a new silver instrument-style icon, inspired by the
+  classic cyan/red/violet monitoring palette, with native small/Retina sizes.
 - Add Server Control 0.2's optional read-only protected-settings backend: signed
   XPC, macOS authorization and explicit Reveal/Copy with transient display and
   clipboard cleanup. Restrict reads to known modern-server configurations;
