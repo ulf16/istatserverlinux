@@ -57,28 +57,53 @@ def linux_topology(root=Path('/sys/class/block')):
     return graph
 
 
-def mac_topology(listing, raid):
+def mac_registry_topology(roots):
+    """Read cached registry properties, never use diskutil for disk discovery."""
     graph = {}
-    def visit(node, parent=None):
+    traits = {}
+    raid_counts = {}
+    def visit(node, characteristics, parent=None, physical=None, uncertain=False, raid_count=None):
         if not isinstance(node, dict):
             return
-        name = node.get('DeviceIdentifier') or node.get('SnapshotBSD')
+        if 'AppleRAID-SetStatus' in node:
+            uncertain |= node['AppleRAID-SetStatus'] != 'Online'
+            members = node.get('AppleRAID-Members')
+            raid_count = len(members) if isinstance(members, list) and members else None
+            uncertain |= raid_count is None
+        name = node.get('BSD Name')
         if device_name(name):
-            stores = [s.get('DeviceIdentifier') for s in node.get('APFSPhysicalStores', [])]
-            graph[name] = [s for s in stores if device_name(s)] or ([parent] if parent else [])
+            if physical is None:
+                physical = name
+                candidate = dict(characteristics)
+                candidate['query_safe'] &= node.get('Whole') is True and not uncertain
+                previous = traits.get(name)
+                if previous is not None and previous != candidate:
+                    candidate['query_safe'] = False
+                traits[name] = candidate
+            parents = graph.setdefault(name, set())
+            if parent and parent != name:
+                parents.add(parent)
+            if uncertain:
+                parents.add('unknown-topology')
+            if raid_count is not None:
+                raid_counts[name] = raid_count
             parent = name
-        for key in ('Partitions', 'APFSVolumes', 'MountedSnapshots'):
-            for child in node.get(key, []):
-                visit(child, parent)
-    for disk in listing.get('AllDisksAndPartitions', []):
-        visit(disk)
-    for disk in raid.get('AppleRAIDSets', []):
-        name = disk.get('BSD Name')
-        if device_name(name):
-            graph[name] = [m.get('BSD Name') if device_name(m.get('BSD Name')) else 'unknown-raid-member' for m in disk.get('Members', [])]
-            if not graph[name] or disk.get('Status', 'Online') != 'Online':
-                graph[name].append('unknown-raid-member')
-    return graph
+        for child in node.get('IORegistryEntryChildren', []):
+            visit(child, characteristics, parent, physical, uncertain, raid_count)
+    for root in roots:
+        device = root.get('Device Characteristics', {})
+        protocol = root.get('Protocol Characteristics', {})
+        visit(root, {
+            'model': str(device.get('Product Name', '')).strip()[:200],
+            'query_safe': device.get('Medium Type') == 'Solid State' and
+                          protocol.get('Physical Interconnect Location') == 'Internal' and
+                          protocol.get('Physical Interconnect') in ('Apple Fabric', 'PCI-Express'),
+        })
+    # A degraded or incompletely discovered RAID must never inherit one member's pass.
+    for name, count in raid_counts.items():
+        if len(ancestors(name, graph)) != count:
+            graph[name].add('unknown-raid-member')
+    return graph, traits
 
 
 def smartctl_health(data, status):
@@ -86,6 +111,12 @@ def smartctl_health(data, status):
     passed = data.get('smart_status', {}).get('passed')
     if status == 99:
         result['state'] = 'standby'
+        result['detail'] = 'Skipped: drive is in standby or sleep'
+        return result
+    elif status == 98:
+        result['state'] = 'unavailable'
+        result['detail'] = 'Skipped: drive power state cannot be established'
+        return result
     elif passed is False or status & 8:
         result['state'] = 'failed'
     elif status & 7:
@@ -108,12 +139,19 @@ def smartctl_health(data, status):
     return result
 
 
-def collect_device(name, system):
-    if name.startswith('unknown-'):
+def collect_device(name, system, traits=None):
+    if not device_name(name) or name.startswith('unknown-'):
         return {'state': 'unknown', 'detail': 'Incomplete device topology'}
     try:
         if system == 'Darwin':
+            identity = (traits or {}).get(name, {})
+            if not identity.get('query_safe'):
+                return {'state': 'unavailable', 'source': 'IORegistry',
+                        'model': identity.get('model', ''),
+                        'detail': 'Skipped by disk-sleep policy: only identified internal native SSDs are queried'}
             result = run(['/usr/sbin/diskutil', 'info', '-plist', '/dev/' + name])
+            if result.returncode != 0:
+                raise ValueError('diskutil failed')
             data = plistlib.loads(result.stdout)
             state = {'Verified': 'passed', 'Failing': 'failed', 'Not Supported': 'unsupported'}.get(data.get('SMARTStatus'), 'unknown')
             return {'state': state, 'source': 'diskutil', 'model': str(data.get('MediaName', ''))[:200], 'detail': ''}
@@ -121,11 +159,14 @@ def collect_device(name, system):
         path = str(Path('/sys/class/block', name).resolve())
         if name.startswith('nvme'):
             kind = 'nvme'
-        elif '/ata' in path:
+        elif re.search(r'/ata[0-9]+/', path):
             kind = 'ata'
         else:
             return {'state': 'unsupported', 'source': 'smartctl', 'detail': 'Transport is not automatically probed'}
-        result = run(['/usr/sbin/smartctl', '-d', kind, '-n', 'standby,99', '-i', '-H', '-A', '-j', '/dev/' + name])
+        guard = ['-n', 'standby,99,98'] if kind == 'ata' else []
+        result = run(['/usr/sbin/smartctl', '-d', kind] + guard + ['-i', '-H', '-A', '-j', '/dev/' + name])
+        if kind == 'ata' and result.returncode in (98, 99):
+            return smartctl_health({}, result.returncode)
         return smartctl_health(json.loads(result.stdout), result.returncode)
     except FileNotFoundError:
         return {'state': 'unavailable', 'detail': 'Collection tool is not installed'}
@@ -165,10 +206,12 @@ def main():
     parser.add_argument('--output', default='/var/run/istatserver-smart/status.xml')
     args = parser.parse_args()
     system = platform.system()
+    traits = {}
     if system == 'Darwin':
-        listing = plistlib.loads(run(['/usr/sbin/diskutil', 'list', '-plist']).stdout)
-        raid = plistlib.loads(run(['/usr/sbin/diskutil', 'appleRAID', 'list', '-plist']).stdout)
-        graph = mac_topology(listing, raid)
+        registry = run(['/usr/sbin/ioreg', '-a', '-l', '-r', '-c', 'IOBlockStorageDevice'])
+        if registry.returncode != 0:
+            raise ValueError('Registry discovery failed; no disks queried')
+        graph, traits = mac_registry_topology(plistlib.loads(registry.stdout))
     else:
         graph = linux_topology()
     physical = sorted(set().union(*(ancestors(n, graph) for n in graph)))
@@ -176,7 +219,7 @@ def main():
         raise ValueError('Too many devices for one health snapshot')
     records = {}
     for name in physical:
-        records[name] = collect_device(name, system)
+        records[name] = collect_device(name, system, traits)
         records[name]['checked'] = str(int(time.time()))
     target = Path(args.output)
     # Installer owns this directory as root, never the network daemon.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Tighten SMART disk-sleep safeguards: Linux ATA checks skip unsupported or
+  unknown power states as well as standby/sleep, with no unguarded fallback.
+  macOS discovers topology from cached IORegistry properties and restricts
+  health queries to positively identified internal native SSDs; HDDs and
+  uncertain devices are explicitly skipped. Retain APFS/RAID device labels.
 - Add optional read-only SMART collection: native macOS diskutil health and
   Linux smartctl JSON for native ATA/NVMe devices. A separate five-minute helper
   writes an atomic cache; the network daemon never launches disk queries.

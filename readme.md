@@ -101,10 +101,26 @@ network daemon are involved. No database schema or history is changed.
 Linux supports native ATA and NVMe devices and resolves partition, MD and
 device-mapper parents. Other transports, including USB bridges, are deliberately
 not auto-probed; `smartctl` warns that transport autodetection can wake a drive.
-ATA checks request standby skipping. macOS uses the SMART status reported by
-diskutil, with explicit APFS physical-store and AppleRAID member mapping. A
-volume passes only when every mapped member reports success. Diskutil exposes
+ATA checks use `-n standby,99,98`: standby/sleep returns a skipped result, and an
+unknown or unsupported power-mode check is also skipped, without an unguarded
+retry. NVMe has no rotating medium and is queried with its explicit transport.
+
+macOS discovers APFS snapshots and AppleRAID members from cached IORegistry
+properties, not `diskutil list` or `diskutil appleRAID list`. Only positively
+identified internal native SSDs (Apple Fabric/PCI-Express) receive a targeted
+`diskutil info` health query. HDDs, external devices and uncertain media are
+reported as unavailable with a disk-sleep-policy explanation, even if awake.
+No numeric IORegistry power state is guessed to mean standby. This conservative
+policy sacrifices HDD health reporting because a reliable no-wake guard for
+native macOS health queries has not been established.
+
+A volume passes only when every mapped member reports success. Diskutil exposes
 platform-reported status, not a new surface scan or a guarantee against failure.
+Skipped observations do not carry forward an old pass with a new timestamp.
+Discovery failures leave the previous cache to expire normally. These safeguards
+limit this helper's queries; they cannot guarantee that the OS, other software,
+or drive firmware will never wake a disk. No self-tests or forced disk-sleep
+experiments are performed during installation or testing.
 
 The additive `diskinfo` fields are `health_version="1"`, `health_state`,
 `health_devices`, `health_checked` (Unix seconds), and `health_detail`. Existing
