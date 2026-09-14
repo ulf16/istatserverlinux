@@ -104,8 +104,12 @@ python3 contrib/istat-server-status.py --prefix /usr/local
 No credentials, raw configuration, logs or history are included in its JSON
 reports. File > Open Status Report can display a separately obtained report as
 a saved snapshot, not a live connection. Protected settings remain explicitly
-unavailable without permission; the app never invokes sudo. Settings editing,
-credential reveal and service control require a future authorized backend.
+unavailable without permission; the app never invokes sudo. Settings editing
+and service control remain future work. Version 0.2 adds an optional signed,
+authorized local settings reader with explicit Reveal/Copy, separate from status
+reports. Protected access needs macOS 13+, an appropriately signed app in
+`/Applications`, and helper approval. The bounded configuration reader also
+builds as a Linux administrator CLI; neither backend writes settings or databases.
 See [control-macos/README.md](control-macos/README.md) for build requirements,
 commands, report contents and current limitations.
 

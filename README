@@ -95,6 +95,12 @@ No sudo, service changes, credentials in reports, or database access is involved
 Protected configuration remains permission-denied instead of guessed. See
 control-macos/README.md for requirements and the pending administration backend.
 
+Server Control 0.2 includes an optional signed, authorized settings reader for
+known local modern-server installations, with explicit Reveal/Copy. It needs
+macOS 13+, an appropriately signed app in /Applications and helper approval.
+The reader also builds as a Linux admin CLI. It performs no settings writes,
+server restarts or DB access; default status reports still exclude credentials.
+
 Optional disk health
 -------------------------
 

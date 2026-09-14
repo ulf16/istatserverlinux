@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add Server Control 0.2's optional read-only protected-settings backend: signed
+  XPC, macOS authorization and explicit Reveal/Copy with transient display and
+  clipboard cleanup. Restrict reads to known modern-server configurations;
+  share the bounded parser and safe file traversal with a Linux admin CLI.
+  Keep credentials out of status reports/exports. Helper enable/disable requires
+  explicit action; deployment approval remains an acceptance step. No server
+  settings, service lifecycle or database changes.
 - Polish Server Control with a charcoal/cyan dashboard, separate Modern/Classic
   views and scrollable native detail tabs. Detect the classic macOS daemon's
   runtime state using launchd plus executable identity, and offer local-only

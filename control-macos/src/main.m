@@ -1,5 +1,8 @@
 #import <Cocoa/Cocoa.h>
 #import "ISCReport.h"
+#import "ISCSettingsClient.h"
+#import "ISCSettingsProtocol.h"
+#import <ServiceManagement/ServiceManagement.h>
 
 @interface ISCFlippedView : NSView
 @end
@@ -19,7 +22,7 @@
 }
 @end
 
-@interface ISCApp : NSObject <NSApplicationDelegate, NSMenuItemValidation>
+@interface ISCApp : NSObject <NSApplicationDelegate, NSMenuItemValidation, NSWindowDelegate>
 @property NSWindow *window;
 @property NSStackView *rows;
 @property NSTextField *heading;
@@ -38,6 +41,11 @@
 @property NSString *prefix;
 @property BOOL busy;
 @property BOOL snapshot;
+@property NSDictionary *protectedSettings;
+@property ISCSettingsClient *settingsClient;
+@property NSAlert *credentialSheet;
+@property NSTextField *credentialField;
+@property NSInteger credentialClipboardChange;
 @end
 
 @implementation ISCApp
@@ -81,6 +89,7 @@
     [self item:@"Inspect This Mac" action:@selector(inspectLocal:) key:@"l" menu:file];
     [self item:@"Choose Installation..." action:@selector(choosePrefix:) key:@"" menu:file];
     [self item:@"Open Classic Server" action:@selector(openClassic:) key:@"" menu:file];
+    [self item:@"Disable Protected Access..." action:@selector(disableProtected:) key:@"" menu:file];
     [file addItem:NSMenuItem.separatorItem];
     [self item:@"Open Status Report..." action:@selector(openReport:) key:@"o" menu:file];
     [self item:@"Export Status Report..." action:@selector(exportReport:) key:@"s" menu:file];
@@ -119,6 +128,7 @@
                                                        NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
                                                backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"iStat Server Control";
+    self.window.delegate = self;
     self.window.contentMinSize = NSMakeSize(600, 470);
     self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     self.window.releasedWhenClosed = NO;
@@ -238,6 +248,7 @@
     [self.timestamp setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(lockProtected:) name:NSApplicationDidResignActiveNotification object:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self refresh:nil];
 }
@@ -323,6 +334,28 @@
             [self row:@"Pairing credential" value:[self state:c[@"pairing"]]];
             [self row:@"Access" value:[self state:c[@"state"]]];
             [self row:@"File" value:i[@"configuration"]];
+            [self section:@"Protected settings"];
+            [self row:@"Read-only helper" value:[self protectedAccessStatus]];
+            if (self.protectedSettings && !self.snapshot) {
+                [self row:@"Configured port" value:[self.protectedSettings[@"port"] stringValue]];
+                [self row:@"Configured address" value:self.protectedSettings[@"address"]];
+                [self row:@"Authentication mode" value:[self state:self.protectedSettings[@"auth_mode"]]];
+                [self row:@"Credential source" value:[self state:self.protectedSettings[@"credential_source"]]];
+                [self row:@"Pairing credential" value:@"Hidden"];
+            }
+            NSButton *enable = [NSButton buttonWithTitle:@"Enable Protected Access..." target:self action:@selector(enableProtected:)];
+            enable.bezelStyle = NSBezelStyleRounded;
+            enable.enabled = !self.snapshot && !self.settingsClient && !self.busy && [self canRegisterHelper];
+            NSButton *read = [NSButton buttonWithTitle:@"Read Settings..." target:self action:@selector(readProtected:)];
+            read.bezelStyle = NSBezelStyleRounded;
+            read.enabled = [self canReadProtected];
+            NSButton *reveal = [self button:@"eye" label:@"Reveal pairing credential" action:@selector(revealProtected:)];
+            NSButton *copy = [self button:@"doc.on.doc" label:@"Copy pairing credential" action:@selector(copyProtected:)];
+            reveal.enabled = copy.enabled = read.enabled;
+            NSStackView *actions = [NSStackView stackViewWithViews:@[enable, read, reveal, copy]];
+            actions.spacing = 8;
+            [self.rows addArrangedSubview:actions];
+            [self row:@"Settings scope" value:@"Configuration file; running options may differ"];
         }
     } else {
         [self section:@"Daemon identity"];
@@ -373,6 +406,7 @@
 
 - (void)refresh:(id)sender {
     if (self.busy || self.snapshot) return;
+    [self clearProtected];
     self.busy = YES; self.refreshButton.enabled = NO; self.exportButton.enabled = NO;
     self.primaryButton.enabled = NO; self.openButton.enabled = NO;
     self.timestamp.stringValue = @"Checking this Mac...";
@@ -411,11 +445,13 @@
 
 - (void)inspectLocal:(id)sender { if (!self.busy) { self.snapshot = NO; [self refresh:nil]; } }
 - (void)changeEdition:(id)sender {
+    [self clearProtected];
     self.choseEdition = YES;
     [self render];
     [self.rows.enclosingScrollView.documentView scrollPoint:NSZeroPoint];
 }
 - (void)changeTab:(id)sender {
+    [self clearProtected];
     [self render];
     [self.rows.enclosingScrollView.documentView scrollPoint:NSZeroPoint];
 }
@@ -433,6 +469,7 @@
 }
 - (void)choosePrefix:(id)sender {
     if (self.busy) return;
+    [self clearProtected];
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.canChooseDirectories = YES; panel.canChooseFiles = NO;
     panel.prompt = @"Inspect"; panel.message = @"Choose the maintained server's installation folder.";
@@ -443,6 +480,7 @@
 
 - (void)openReport:(id)sender {
     if (self.busy) return;
+    [self clearProtected];
     NSOpenPanel *panel = [NSOpenPanel openPanel]; panel.allowedFileTypes = @[@"json"];
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
         if (result != NSModalResponseOK) return;
@@ -471,10 +509,173 @@
 - (void)showHelp:(id)sender {
     [NSWorkspace.sharedWorkspace openURL:[NSBundle.mainBundle URLForResource:@"README" withExtension:@"md"]];
 }
+
+- (NSString *)settingsInstallation {
+    if ([self.prefix isEqual:@"/opt/istatserverlinux"]) return @"opt";
+    if ([self.prefix isEqual:@"/usr/local"]) return @"local";
+    return nil;
+}
+- (BOOL)canRegisterHelper {
+    if (@available(macOS 13.0, *)) {
+        return ISCSettingsPeerRequirement(ISCSettingsService) != nil &&
+            [[NSBundle.mainBundle.bundlePath stringByDeletingLastPathComponent] isEqual:@"/Applications"];
+    }
+    return NO;
+}
+- (NSString *)protectedAccessStatus {
+    if (self.snapshot) return @"Unavailable for saved reports";
+    if (@available(macOS 13.0, *)) {
+        if (!ISCSettingsPeerRequirement(ISCSettingsService)) return @"Signed build required";
+        if (![self canRegisterHelper]) return @"Install signed app in /Applications";
+        switch ([SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status) {
+            case SMAppServiceStatusEnabled: return self.settingsClient ? @"Authorizing..." : @"Ready; authorization required";
+            case SMAppServiceStatusRequiresApproval: return @"Approval needed in System Settings";
+            default: return @"Not enabled";
+        }
+    }
+    return @"Requires macOS 13 or later";
+}
+- (BOOL)canReadProtected {
+    if (self.snapshot || self.busy || self.settingsClient || self.edition.selectedSegment != 0 ||
+        ![self settingsInstallation] || ![self.report[@"installation"][@"installed"] boolValue] || ![self canRegisterHelper]) return NO;
+    if (@available(macOS 13.0, *)) return [SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status == SMAppServiceStatusEnabled;
+    return NO;
+}
+- (void)enableProtected:(id)sender {
+    if (self.snapshot || self.busy || self.settingsClient || ![self canRegisterHelper]) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Enable protected settings access?";
+    alert.informativeText = @"This registers a root helper that can read only the modern server's known configuration files. Each read requires macOS authorization. It cannot change settings, control services or access databases. macOS may require approval in Login Items & Extensions.";
+    [alert addButtonWithTitle:@"Enable"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result != NSAlertFirstButtonReturn) return;
+        if (@available(macOS 13.0, *)) {
+            SMAppService *service = [SMAppService daemonServiceWithPlistName:ISCSettingsPlist];
+            NSError *error = nil;
+            if (service.status != SMAppServiceStatusEnabled && service.status != SMAppServiceStatusRequiresApproval && ![service registerAndReturnError:&error]) {
+                [self failure:@"macOS did not register the signed helper. Distribution builds require Developer ID signing and notarization. No server settings were changed."];
+            } else if (service.status == SMAppServiceStatusRequiresApproval) [SMAppService openSystemSettingsLoginItems];
+            [self render];
+        }
+    }];
+}
+- (BOOL)canDisableHelper {
+    if (self.snapshot || self.busy || self.settingsClient || ![self canRegisterHelper]) return NO;
+    if (@available(macOS 13.0, *)) {
+        SMAppServiceStatus status = [SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status;
+        return status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval;
+    }
+    return NO;
+}
+- (void)disableProtected:(id)sender {
+    if (![self canDisableHelper]) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Disable protected settings access?";
+    alert.informativeText = @"This unregisters only the settings reader. The iStat server and its collection helpers keep running; configuration and history are unchanged.";
+    [alert addButtonWithTitle:@"Disable"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result != NSAlertFirstButtonReturn) return;
+        [self clearProtected];
+        if (@available(macOS 13.0, *)) {
+            if (![[SMAppService daemonServiceWithPlistName:ISCSettingsPlist] unregisterAndReturnError:nil])
+                [self failure:@"macOS could not unregister the settings reader. Its access can also be disabled in Login Items & Extensions."];
+        }
+        [self render];
+    }];
+}
+- (void)requestProtected:(NSInteger)action {
+    if (![self canReadProtected]) return;
+    ISCSettingsClient *client = [ISCSettingsClient new];
+    self.settingsClient = client;
+    [self render];
+    __weak ISCApp *weak = self;
+    [client readInstallation:[self settingsInstallation] reveal:action != 0 completion:^(NSDictionary *result, NSString *error) {
+        ISCApp *app = weak;
+        if (app.settingsClient != client) return;
+        app.settingsClient = nil;
+        if (error) { [app render]; [app failure:error]; return; }
+        if (!result || app.snapshot || !NSApp.active || !app.window.visible) { [app render]; return; }
+        // Secrets never enter the ordinary report or the settings metadata.
+        app.protectedSettings = [result dictionaryWithValuesForKeys:@[@"port", @"address", @"auth_mode", @"credential_source"]];
+        [app render];
+        if (action == 1) [app showCredential:result[@"credential"]];
+        if (action == 2) {
+            NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+            [pasteboard clearContents];
+            [pasteboard setString:result[@"credential"] forType:NSPasteboardTypeString];
+            // Mark as transient/concealed for clipboard managers which honor it.
+            [pasteboard setData:[NSData data] forType:@"org.nspasteboard.ConcealedType"];
+            [pasteboard setData:[NSData data] forType:@"org.nspasteboard.TransientType"];
+            NSInteger count = pasteboard.changeCount;
+            app.credentialClipboardChange = count;
+            app.timestamp.stringValue = @"Credential copied; clipboard clears in 30 seconds";
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                if (pasteboard.changeCount == count) [pasteboard clearContents];
+            });
+        }
+    }];
+}
+- (void)readProtected:(id)sender { [self requestProtected:0]; }
+- (void)revealProtected:(id)sender { [self requestProtected:1]; }
+- (void)copyProtected:(id)sender { [self requestProtected:2]; }
+- (void)showCredential:(NSString *)credential {
+    NSAlert *sheet = [NSAlert new];
+    sheet.messageText = @"Pairing credential";
+    sheet.informativeText = @"From the modern server configuration. Hidden when this window loses focus or after 30 seconds.";
+    NSTextField *field = [NSTextField wrappingLabelWithString:credential];
+    field.font = [NSFont monospacedSystemFontOfSize:22 weight:NSFontWeightMedium];
+    field.selectable = NO;
+    field.frame = NSMakeRect(0, 0, 360, 80);
+    field.maximumNumberOfLines = 3;
+    field.lineBreakMode = NSLineBreakByTruncatingTail;
+    sheet.accessoryView = field;
+    [sheet addButtonWithTitle:@"Hide"];
+    self.credentialSheet = sheet; self.credentialField = field;
+    [sheet beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        field.stringValue = @"";
+        if (self.credentialSheet == sheet) { self.credentialSheet = nil; self.credentialField = nil; }
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (self.credentialSheet == sheet) [self hideCredential];
+    });
+}
+- (void)hideCredential {
+    self.credentialField.stringValue = @"";
+    if (self.credentialSheet) [self.window endSheet:self.credentialSheet.window];
+    self.credentialSheet = nil; self.credentialField = nil;
+}
+- (void)clearProtected {
+    ISCSettingsClient *client = self.settingsClient;
+    self.settingsClient = nil;
+    [client cancel];
+    self.protectedSettings = nil;
+    [self hideCredential];
+}
+- (void)lockProtected:(NSNotification *)note {
+    self.protectedSettings = nil;
+    [self hideCredential];
+    // The OS authorization dialog itself can deactivate the app. Do not cancel
+    // that deliberate request or automatically retry it.
+    if (!self.settingsClient) [self render];
+}
+- (void)windowWillClose:(NSNotification *)note { [self clearProtected]; }
+- (void)applicationDidBecomeActive:(NSNotification *)note {
+    // Approval can change while System Settings is foreground. Refresh only
+    // controls; never start another authorization request automatically.
+    [self render];
+}
+- (void)applicationWillTerminate:(NSNotification *)note {
+    [self clearProtected];
+    if (self.credentialClipboardChange && NSPasteboard.generalPasteboard.changeCount == self.credentialClipboardChange)
+        [NSPasteboard.generalPasteboard clearContents];
+}
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     if (item.action == @selector(refresh:)) return !self.busy && !self.snapshot;
     if (item.action == @selector(exportReport:)) return !self.busy && self.report != nil;
     if (item.action == @selector(openClassic:)) return !self.busy && [self canOpenClassic];
+    if (item.action == @selector(disableProtected:)) return [self canDisableHelper];
     if (item.action == @selector(inspectLocal:) || item.action == @selector(choosePrefix:) || item.action == @selector(openReport:)) return !self.busy;
     return YES;
 }
