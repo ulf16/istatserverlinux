@@ -34,7 +34,7 @@
 - (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
     NSString *requirement = ISCSettingsPeerRequirement(@"org.istatserver.control");
     if (geteuid() != 0 || !requirement) return NO;
-    [connection setCodeSigningRequirement:requirement];
+    if (!ISCApplySettingsRequirement(connection, requirement)) return NO;
     connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ISCSettingsProtocol)];
     connection.exportedObject = [ISCSettingsSession new];
     [connection resume];

@@ -76,7 +76,9 @@ NSDictionary *ISCValidateSettings(NSData *data, BOOL reveal) {
                 NSData *token = [NSData dataWithBytes:&form length:sizeof(form)];
                 memset(&form, 0, sizeof(form));
                 self.connection = [[NSXPCConnection alloc] initWithMachServiceName:ISCSettingsService options:NSXPCConnectionPrivileged];
-                [self.connection setCodeSigningRequirement:requirement];
+                if (!ISCApplySettingsRequirement(self.connection, requirement)) {
+                    [self finish:nil error:@"The settings helper's signature check could not be configured. Access was not attempted."]; return;
+                }
                 self.connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ISCSettingsProtocol)];
                 __weak ISCSettingsClient *weak = self;
                 self.connection.interruptionHandler = ^{ dispatch_async(dispatch_get_main_queue(), ^{ [weak finish:nil error:@"The settings helper disconnected. No changes were made."]; }); };

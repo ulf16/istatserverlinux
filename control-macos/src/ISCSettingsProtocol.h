@@ -10,3 +10,5 @@
 
 // Both ends require the same Apple-issued team plus the exact peer identifier.
 NSString *ISCSettingsPeerRequirement(NSString *identifier);
+NSString *ISCSettingsRequirementForTeam(NSString *identifier, NSString *team);
+BOOL ISCApplySettingsRequirement(NSXPCConnection *connection, NSString *requirement);

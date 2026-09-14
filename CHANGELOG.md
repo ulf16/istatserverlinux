@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix Server Control 0.2 build 4 crashing after protected-access authorization:
+  compile valid peer-signature requirements and fail closed on XPC setup errors.
+  Treat pending macOS helper approval as waiting, observe completion without
+  re-registering or automatically reading credentials, and distinguish normal
+  file protection from helper approval. Add signed XPC and approval regressions.
 - Give Server Control a new silver instrument-style icon, inspired by the
   classic cyan/red/violet monitoring palette, with native small/Retina sizes.
 - Add Server Control 0.2's optional read-only protected-settings backend: signed

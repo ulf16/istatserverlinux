@@ -19,6 +19,9 @@ EXTRA_DIST = README COPYING autogen \
 	control-macos/helper/main.mm control-macos/helper/org.istatserver.control.settings.plist \
 	control-macos/tests/ISCSettingsTests.m control-macos/tests/ISCSettingsHelperTests.mm \
 	control-macos/tests/run-helper-tests.sh \
+	control-macos/src/ISCHelperRegistration.h control-macos/src/ISCHelperRegistration.m \
+	control-macos/tests/ISCHelperRegistrationTests.m control-macos/tests/ISCSettingsTrustTests.m \
+	control-macos/tests/run-trust-tests.sh \
 	control-macos/assets/AppIcon.png control-macos/assets/build-icon.sh control-macos/assets/README.md \
 	contrib/istat-smart-helper.py contrib/install-smart-helper.sh \
 	contrib/istat-smart.service.in contrib/istat-smart.timer \

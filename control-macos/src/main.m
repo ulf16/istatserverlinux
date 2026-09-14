@@ -2,6 +2,7 @@
 #import "ISCReport.h"
 #import "ISCSettingsClient.h"
 #import "ISCSettingsProtocol.h"
+#import "ISCHelperRegistration.h"
 #import <ServiceManagement/ServiceManagement.h>
 
 @interface ISCFlippedView : NSView
@@ -46,6 +47,8 @@
 @property NSAlert *credentialSheet;
 @property NSTextField *credentialField;
 @property NSInteger credentialClipboardChange;
+@property ISCHelperRegistrationState helperRegistration;
+@property NSTimer *approvalTimer;
 @end
 
 @implementation ISCApp
@@ -332,7 +335,7 @@
             [self row:@"Bonjour" value:@"Not observed"];
             [self section:@"Pairing & configuration"];
             [self row:@"Pairing credential" value:[self state:c[@"pairing"]]];
-            [self row:@"Access" value:[self state:c[@"state"]]];
+            [self row:@"Direct file access" value:[c[@"state"] isEqual:@"permission-denied"] ? @"Protected by macOS" : [self state:c[@"state"]]];
             [self row:@"File" value:i[@"configuration"]];
             [self section:@"Protected settings"];
             [self row:@"Read-only helper" value:[self protectedAccessStatus]];
@@ -344,8 +347,13 @@
                 [self row:@"Pairing credential" value:@"Hidden"];
             }
             NSButton *enable = [NSButton buttonWithTitle:@"Enable Protected Access..." target:self action:@selector(enableProtected:)];
+            if (self.helperRegistration == ISCHelperRegistrationWaiting)
+                enable.title = @"Open Approval Settings...";
+            else if (self.helperRegistration == ISCHelperRegistrationReady)
+                enable.title = @"Protected Access Enabled";
             enable.bezelStyle = NSBezelStyleRounded;
-            enable.enabled = !self.snapshot && !self.settingsClient && !self.busy && [self canRegisterHelper];
+            enable.enabled = !self.snapshot && !self.settingsClient && !self.busy && [self canRegisterHelper] &&
+                self.helperRegistration != ISCHelperRegistrationReady;
             NSButton *read = [NSButton buttonWithTitle:@"Read Settings..." target:self action:@selector(readProtected:)];
             read.bezelStyle = NSBezelStyleRounded;
             read.enabled = [self canReadProtected];
@@ -527,6 +535,7 @@
     if (@available(macOS 13.0, *)) {
         if (!ISCSettingsPeerRequirement(ISCSettingsService)) return @"Signed build required";
         if (![self canRegisterHelper]) return @"Install signed app in /Applications";
+        if (self.helperRegistration == ISCHelperRegistrationWaiting) return @"Waiting for approval in System Settings";
         switch ([SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status) {
             case SMAppServiceStatusEnabled: return self.settingsClient ? @"Authorizing..." : @"Ready; authorization required";
             case SMAppServiceStatusRequiresApproval: return @"Approval needed in System Settings";
@@ -543,6 +552,16 @@
 }
 - (void)enableProtected:(id)sender {
     if (self.snapshot || self.busy || self.settingsClient || ![self canRegisterHelper]) return;
+    if (@available(macOS 13.0, *)) {
+        if (self.helperRegistration == ISCHelperRegistrationWaiting ||
+            [SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status == SMAppServiceStatusRequiresApproval) {
+            self.helperRegistration = ISCHelperRegistrationWaiting;
+            [self observeHelperApproval];
+            [SMAppService openSystemSettingsLoginItems];
+            [self render];
+            return;
+        }
+    }
     NSAlert *alert = [NSAlert new];
     alert.messageText = @"Enable protected settings access?";
     alert.informativeText = @"This registers a root helper that can read only the modern server's known configuration files. Each read requires macOS authorization. It cannot change settings, control services or access databases. macOS may require approval in Login Items & Extensions.";
@@ -553,18 +572,46 @@
         if (@available(macOS 13.0, *)) {
             SMAppService *service = [SMAppService daemonServiceWithPlistName:ISCSettingsPlist];
             NSError *error = nil;
-            if (service.status != SMAppServiceStatusEnabled && service.status != SMAppServiceStatusRequiresApproval && ![service registerAndReturnError:&error]) {
+            BOOL registered = YES;
+            if (service.status != SMAppServiceStatusEnabled && service.status != SMAppServiceStatusRequiresApproval)
+                registered = [service registerAndReturnError:&error];
+            self.helperRegistration = ISCRegistrationResult(service.status, registered, error);
+            if (self.helperRegistration == ISCHelperRegistrationFailed) {
                 [self failure:@"macOS did not register the signed helper. Distribution builds require Developer ID signing and notarization. No server settings were changed."];
-            } else if (service.status == SMAppServiceStatusRequiresApproval) [SMAppService openSystemSettingsLoginItems];
+            } else if (self.helperRegistration == ISCHelperRegistrationWaiting) {
+                [self observeHelperApproval];
+                [SMAppService openSystemSettingsLoginItems];
+            }
             [self render];
         }
     }];
+}
+- (void)observeHelperApproval {
+    if (self.approvalTimer) return;
+    __weak ISCApp *weak = self;
+    self.approvalTimer = [NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
+        [weak refreshHelperApproval];
+    }];
+}
+- (void)refreshHelperApproval {
+    if (@available(macOS 13.0, *)) {
+        if (![self canRegisterHelper]) return;
+        ISCHelperRegistrationState state = ISCRegistrationObserved(
+            [SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status, self.helperRegistration);
+        BOOL changed = state != self.helperRegistration;
+        self.helperRegistration = state;
+        if (state == ISCHelperRegistrationWaiting) [self observeHelperApproval];
+        else { [self.approvalTimer invalidate]; self.approvalTimer = nil; }
+        // Observe only: approval must never initiate a credential read or retry.
+        if (changed) [self render];
+    }
 }
 - (BOOL)canDisableHelper {
     if (self.snapshot || self.busy || self.settingsClient || ![self canRegisterHelper]) return NO;
     if (@available(macOS 13.0, *)) {
         SMAppServiceStatus status = [SMAppService daemonServiceWithPlistName:ISCSettingsPlist].status;
-        return status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval;
+        return status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval ||
+            self.helperRegistration == ISCHelperRegistrationWaiting;
     }
     return NO;
 }
@@ -581,6 +628,10 @@
         if (@available(macOS 13.0, *)) {
             if (![[SMAppService daemonServiceWithPlistName:ISCSettingsPlist] unregisterAndReturnError:nil])
                 [self failure:@"macOS could not unregister the settings reader. Its access can also be disabled in Login Items & Extensions."];
+            else {
+                self.helperRegistration = ISCHelperRegistrationIdle;
+                [self.approvalTimer invalidate]; self.approvalTimer = nil;
+            }
         }
         [self render];
     }];
@@ -664,9 +715,11 @@
 - (void)applicationDidBecomeActive:(NSNotification *)note {
     // Approval can change while System Settings is foreground. Refresh only
     // controls; never start another authorization request automatically.
+    [self refreshHelperApproval];
     [self render];
 }
 - (void)applicationWillTerminate:(NSNotification *)note {
+    [self.approvalTimer invalidate];
     [self clearProtected];
     if (self.credentialClipboardChange && NSPasteboard.generalPasteboard.changeCount == self.credentialClipboardChange)
         [NSPasteboard.generalPasteboard clearContents];

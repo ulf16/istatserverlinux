@@ -90,6 +90,10 @@ Requirements and activation:
 4. Install the app directly in `/Applications`. Do not enable the helper from a
    mutable build checkout. In Modern Server > Connection, choose Enable Protected
    Access and approve it in System Settings > Login Items & Extensions if asked.
+   While approval is pending, the app shows Waiting for approval and observes
+   status once per second. Open Approval Settings returns to macOS without
+   registering again. There is no approval timeout, automatic settings read or
+   repeated authorization prompt. Direct file access remains protected normally.
 5. Read Settings shows configured port/address and authentication mode. Reveal
    and Copy each make a separate deliberate request. Authorization Services
    decides whether another prompt is needed; the app stores no authorization.
@@ -156,6 +160,14 @@ keyboard shortcuts are checked in the app without changing server installations.
 Settings tests cover parsing/defaults, redaction, fixed targets, permissions,
 symlink/hard-link/FIFO rejection, unchanged fixture DB metadata, malformed replies,
 unsigned peers, forged tokens and valid sessions lacking administrator rights.
+Build 4 corrects an invalid signature-requirement expression that caused build 3
+to throw after authorization. Both connection ends now reject setup failures
+without crashing or continuing with an unrestricted connection. Tests exercise
+the actual requirement compiler/setter and approval-state transitions.
+For signed, bidirectional XPC tests (including wrong identity/team rejection),
+run `make -C control-macos test-signed SIGN_IDENTITY="<signing identity>"`.
+These tests use an anonymous local listener and no administrator authorization,
+server configuration or credentials. Run outside a restrictive process sandbox.
 The OS authorization test runs from a disposable `/private/tmp` directory because
 authd may be unable to inspect test executables inside a Documents checkout.
 Credential-free protected reads were verified on both minis via their existing

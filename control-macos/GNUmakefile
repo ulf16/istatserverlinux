@@ -35,10 +35,20 @@ test:
 	build/settings-tests
 	clang $(FLAGS) -framework Foundation -framework Security -Isrc tests/ISCSettingsTests.m src/ISCSettingsClient.m src/ISCSettingsTrust.m -o build/ISCSettingsTests
 	build/ISCSettingsTests
+	clang $(FLAGS) -framework Foundation -framework Security -Isrc tests/ISCSettingsTrustTests.m src/ISCSettingsTrust.m -o build/ISCSettingsTrustTests
+	build/ISCSettingsTrustTests
+	clang $(FLAGS) -framework Foundation -framework ServiceManagement -Isrc tests/ISCHelperRegistrationTests.m src/ISCHelperRegistration.m -o build/ISCHelperRegistrationTests
+	build/ISCHelperRegistrationTests
 	clang++ -x objective-c++ -std=c++11 -fobjc-arc -Wall -Wextra -DISC_HELPER_TESTING -mmacosx-version-min=13.0 -framework Foundation -framework Security -Isrc -I../contrib/settings tests/ISCSettingsHelperTests.mm helper/main.mm src/ISCSettingsTrust.m $(CORE) -o build/ISCSettingsHelperTests
 	sh tests/run-helper-tests.sh
 
 .PHONY: settings-cli
+.PHONY: test-signed
+test-signed:
+	mkdir -p build
+	clang $(FLAGS) -framework Foundation -framework Security -Isrc tests/ISCSettingsTrustTests.m src/ISCSettingsTrust.m -o build/ISCSettingsTrustTests
+	sh tests/run-trust-tests.sh "$(SIGN_IDENTITY)"
+
 settings-cli:
 	mkdir -p build
 	c++ -std=c++11 -Wall -Wextra ../contrib/settings/main.cpp $(CORE) -o build/istat-settings-read
